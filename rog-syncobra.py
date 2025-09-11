@@ -228,7 +228,7 @@ def exif_sort(src, dest, args):
     os.chdir(src)
     vflag = '-v' if args.debug else '-q'
     recur = ['-r'] if args.recursive else []
-    ym = datetime.now().strftime('%Y/%m') if args.year_month_sort else '.'
+    ym = '%Y/%m' if args.year_month_sort else '.'
 
     def run(cmd):
         safe_run(cmd, args.dry_run)
@@ -412,7 +412,7 @@ def archive_old(src, archive_dir, years, dry_run=False):
 
 def pipeline(args):
     src = args.inputdir
-    dest = args.move2targetdir or src
+    dest = (args.move2targetdir or src).rstrip('/')
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
