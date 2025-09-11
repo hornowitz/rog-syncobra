@@ -1,11 +1,42 @@
 # rog-syncobra
-Python script that utilizes exiftool and more to sort and move pictures to a desired destination.
+Python script that utilizes exiftool and other utilities to sort and move
+pictures to a desired destination.
+
+## Requirements
+
+The script relies on a few external programs:
+
+- `libimage-exiftool-perl` (provides `exiftool`)
+- `xxhash` (provides `xxhsum`)
+- `rdfind`
+- `inotify-tools` (required only for `--watch` mode)
+- standard Unix tools such as `sort`, `du` and `df`
+
+To automatically install missing packages run:
+
+```bash
+./rog-syncobra.py --install-deps
+```
 
 ## Options
 
-- `-Y/--check-year-mount` – verify that the current year's folder under the
-  destination exists and is a mountpoint before processing. Useful when each
-  year is a separate ZFS dataset.
+- `-r, --recursive` – recurse into subdirectories
+- `-d, --ddwometadata` – raw dedupe by XXH64 between source and destination
+- `-D, --deldupi` – metadata dedupe by rdfind on source
+- `-X, --deldupidest` – metadata dedupe by rdfind on destination
+- `-y, --year-month-sort` – sort into `Year/Month` directories (default on)
+- `-Y, --check-year-mount` – verify that the current year's folder under the
+  destination exists and is a mountpoint
+- `-m, --move2targetdir DIR` – destination directory for processed files
+- `-w, --whatsapp` – enable WhatsApp media handling
+- `-n, --dry-run` – show actions without executing them
+- `--debug` – verbose exiftool output
+- `-W, --watch` – watch mode; monitor for `CLOSE_WRITE` events
+- `-I, --inputdir DIR` – directory to watch/process (default: current directory)
+- `-g, --grace SECONDS` – seconds to wait after `close_write` (default: 300)
+- `--archive-dir DIR` – directory to archive old files to
+- `--archive-years YEARS` – move directories older than this many years (default: 2)
+- `--install-deps` – install required system packages and exit
 
 ## Systemd service
 An example systemd **template** unit is provided in `rog-syncobra@.service`. It
