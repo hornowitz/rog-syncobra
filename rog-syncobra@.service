@@ -9,6 +9,10 @@ EnvironmentFile=/etc/rog-syncobra/%i.conf
 ExecStart=/usr/bin/env python3 /usr/local/bin/rog-syncobra.py --watch \\
   --inputdir ${INPUTDIR} --move2targetdir ${DESTDIR} ${EXTRA_ARGS}
 Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rog-syncobra@%i
+LogsDirectory=rog-syncobra
 
 [Install]
 WantedBy=multi-user.target

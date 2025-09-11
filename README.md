@@ -61,3 +61,9 @@ sudo systemctl enable --now rog-syncobra@example.service
 
 Create additional `*.conf` files under `/etc/rog-syncobra/` and start them with
 `systemctl enable --now rog-syncobra@<name>.service` to run multiple instances.
+
+## Logging
+
+When running under systemd the service logs to the system journal and can be
+viewed with `journalctl -u rog-syncobra@<instance>.service`.  Additionally, a
+rotating log file is written to `/var/log/rog-syncobra/rog-syncobra.log`.
