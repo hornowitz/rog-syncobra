@@ -8,19 +8,25 @@ Python script that utilizes exiftool and more to sort and move pictures to a des
   year is a separate ZFS dataset.
 
 ## Systemd service
-An example systemd unit is provided in `rog-syncobra.service`. It runs the script in watch mode and restarts on failure.
+An example systemd **template** unit is provided in `rog-syncobra@.service`. It
+reads instance-specific settings from `/etc/rog-syncobra/<instance>.conf`,
+allowing multiple configurations to run simultaneously.
 
-To install:
+To install a new instance:
 
 ```bash
-sudo cp rog-syncobra.service /etc/systemd/system/
-sudo systemctl daemon-reload
+sudo cp rog-syncobra@.service /etc/systemd/system/
+sudo mkdir -p /etc/rog-syncobra
 
-sudo tee /etc/default/rog-syncobra <<'EOF2'
+sudo tee /etc/rog-syncobra/example.conf <<'EOF'
 INPUTDIR=/path/to/watch
 DESTDIR=/path/to/destination
 EXTRA_ARGS=""
-EOF2
+EOF
 
-sudo systemctl enable --now rog-syncobra.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now rog-syncobra@example.service
 ```
+
+Create additional `*.conf` files under `/etc/rog-syncobra/` and start them with
+`systemctl enable --now rog-syncobra@<name>.service` to run multiple instances.
