@@ -1,0 +1,13 @@
+[Unit]
+Description=rog-syncobra media sorting service
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/rog-syncobra
+ExecStart=/usr/bin/env python3 /usr/local/bin/rog-syncobra.py --watch \\
+  --inputdir ${INPUTDIR} --move2targetdir ${DESTDIR} ${EXTRA_ARGS}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
