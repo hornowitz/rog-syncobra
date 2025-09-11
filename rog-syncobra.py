@@ -57,6 +57,8 @@ def parse_args():
                    help="Metadata dedupe by rdfind on destination")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
+    p.add_argument('-Y','--check-year-mount', action='store_true',
+                   help="Verify current year dir under destination is a mountpoint")
     p.add_argument('-m','--move2targetdir', metavar='DIR', default='',
                    help="Destination directory for processed files")
     p.add_argument('-w','--whatsapp', action='store_true',
@@ -110,6 +112,17 @@ def check_disk_space(src, dest, dry_run=False):
     if not dry_run and avail < required:
         logger.error("Not enough space, aborting")
         sys.exit(1)
+
+def check_year_mount(dest):
+    """Ensure the destination's current year directory exists and is mounted."""
+    year_dir = os.path.join(os.path.abspath(dest), datetime.now().strftime('%Y'))
+    if not os.path.isdir(year_dir):
+        logger.error(f"Year directory {year_dir} does not exist")
+        sys.exit(1)
+    if not os.path.ismount(year_dir):
+        logger.error(f"Year directory {year_dir} is not a mountpoint")
+        sys.exit(1)
+    logger.info(f"Verified mountpoint for {year_dir}")
 
 def metadata_dedupe(path, dry_run=False):
     cmd = ['rdfind','-deleteduplicates','true', path]
@@ -401,7 +414,8 @@ def archive_old(src, archive_dir, years, dry_run=False):
 def pipeline(args):
     src = args.inputdir
     dest = args.move2targetdir or src
-
+    if args.check_year_mount and args.year_month_sort:
+        check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
     if args.deldupidest:
         metadata_dedupe(dest, args.dry_run)
