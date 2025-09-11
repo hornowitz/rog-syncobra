@@ -46,6 +46,27 @@ def check_program(name):
         logger.error(f"Required program '{name}' not found in PATH.")
         sys.exit(1)
 
+
+def install_requirements():
+    """Install missing external program dependencies using apt."""
+    packages = {
+        'exiftool': 'libimage-exiftool-perl',
+        'xxhsum': 'xxhash',
+        'rdfind': 'rdfind',
+        'inotifywait': 'inotify-tools',
+    }
+    missing = [pkg for prog, pkg in packages.items() if not shutil.which(prog)]
+    if not missing:
+        logger.info("All required programs already installed")
+        return
+    logger.info("Installing missing packages: %s" % ", ".join(missing))
+    try:
+        subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+        subprocess.run(['sudo', 'apt-get', 'install', '-y', *missing], check=True)
+    except Exception as e:
+        logger.error(f"Failed to install dependencies: {e}")
+        sys.exit(1)
+
 def parse_args():
     p = argparse.ArgumentParser(description="rog-syncobra: sort & dedupe media")
     p.add_argument('-r','--recursive', action='store_true', help="Recurse subdirectories")
@@ -77,6 +98,8 @@ def parse_args():
                    help="Directory to archive old files to (e.g. /rogaliki/obrazy/0archiv)")
     p.add_argument('--archive-years', type=int, default=2,
                    help="Move directories older than this many years (default 2)")
+    p.add_argument('--install-deps', action='store_true',
+                   help="Install required system packages and exit")
     return p.parse_args()
 
 def safe_run(cmd, dry_run=False):
@@ -431,6 +454,9 @@ def pipeline(args):
 
 def main():
     args = parse_args()
+    if args.install_deps:
+        install_requirements()
+        return
     for cmd in ('exiftool','xxhsum','rdfind','sort','du','df'):
         check_program(cmd)
     if args.watch:
