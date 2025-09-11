@@ -177,6 +177,7 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
                 tmp_dest.write(f"{h}\t{p}\n")
 
         tmp_src.flush(); tmp_dest.flush()
+        tmp_src.close(); tmp_dest.close()
 
         # sort on disk
         sorted_src  = tmp_src.name  + '.s'
@@ -213,6 +214,11 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
         logger.info(f"{freed} bytes freed")
 
     finally:
+        for fh in (tmp_src, tmp_dest):
+            try:
+                fh.close()
+            except Exception:
+                pass
         for fn in (tmp_src.name, tmp_dest.name, sorted_src, sorted_dest):
             if fn and os.path.exists(fn):
                 os.unlink(fn)
@@ -342,10 +348,6 @@ def archive_old(src, archive_dir, years, dry_run=False):
     into the matching structure under `archive_dir`, but only if there’s
     sufficient free space on the archive filesystem.
     """
-    import os
-    import shutil
-    from datetime import datetime
-
     src_abs  = os.path.abspath(src)
     arch_abs = os.path.abspath(archive_dir)
 
@@ -365,21 +367,18 @@ def archive_old(src, archive_dir, years, dry_run=False):
     to_move = []    # list of (src_path, dest_path)
     total_size = 0
 
-    for year in os.listdir(src_abs):
-        if not year.isdigit():
+    for year_entry in os.scandir(src_abs):
+        if not year_entry.is_dir() or not year_entry.name.isdigit():
             continue
-        y = int(year)
-        year_dir = os.path.join(src_abs, year)
-        if not os.path.isdir(year_dir):
-            continue
-        for month in os.listdir(year_dir):
-            if not month.isdigit():
+        y = int(year_entry.name)
+        for month_entry in os.scandir(year_entry.path):
+            if not month_entry.is_dir() or not month_entry.name.isdigit():
                 continue
-            m = int(month)
+            m = int(month_entry.name)
             # check if this YYYY/MM is older than cutoff
             if (y < cutoff_year) or (y == cutoff_year and m < cutoff_month):
-                src_path  = os.path.join(year_dir, month)
-                dest_path = os.path.join(arch_abs, year, month)
+                src_path  = month_entry.path
+                dest_path = os.path.join(arch_abs, year_entry.name, month_entry.name)
                 # sum sizes of all files in this folder
                 for root, _, files in os.walk(src_path):
                     for fn in files:
