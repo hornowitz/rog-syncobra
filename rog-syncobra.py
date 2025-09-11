@@ -97,7 +97,13 @@ def check_disk_space(src, dest, dry_run=False):
         du_cmd = ['du','--bytes','-c',src_abs]
     out = subprocess.check_output(du_cmd).decode()
     required = int([l for l in out.splitlines() if l.endswith('total')][0].split()[0])
-    stat = shutil.disk_usage(os.path.dirname(wd_abs))
+    usage_path = wd_abs
+    while not os.path.exists(usage_path):
+        parent = os.path.dirname(usage_path)
+        if parent == usage_path:
+            break
+        usage_path = parent
+    stat = shutil.disk_usage(usage_path)
     avail = stat.free
     logger.info(f"Required: {required} B ({required/1024/1024:.2f} MB), "
                 f"Available: {avail} B ({avail/1024/1024:.2f} MB)")
