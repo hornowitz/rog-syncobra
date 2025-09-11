@@ -434,6 +434,8 @@ def main():
     for cmd in ('exiftool','xxhsum','rdfind','sort','du','df'):
         check_program(cmd)
     if args.watch:
+        check_program('inotifywait')
+        pipeline(args)
         logger.info(f"Entering watch mode on {args.inputdir}")
         while True:
             subprocess.run(['inotifywait','-e','close_write','-r', args.inputdir])
