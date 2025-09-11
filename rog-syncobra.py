@@ -39,6 +39,15 @@ try:
     logger.addHandler(fh)
 except Exception as e:
     logger.error(f"Could not open log file {LOGFILE}: {e}")
+
+try:
+    from systemd.journal import JournalHandler
+    jh = JournalHandler()
+    jh.setLevel(logging.INFO)
+    jh.setFormatter(fmt)
+    logger.addHandler(jh)
+except Exception:
+    pass
 # ────────────────────────────────────────────────────────────────────────────────
 
 def check_program(name):
