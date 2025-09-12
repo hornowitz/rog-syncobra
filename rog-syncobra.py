@@ -109,7 +109,17 @@ def parse_args():
                    help="Move directories older than this many years (default 2)")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
-    return p.parse_args()
+
+    # Use parse_known_args so we can gracefully ignore stray '-' arguments.
+    # A single dash can sneak in via misconfigured systemd unit files or
+    # shell wrappers and would normally cause argparse to abort.  We strip
+    # such dashes from the list of unknown arguments and only raise an error
+    # if anything else remains.
+    args, extra = p.parse_known_args()
+    extra = [e for e in extra if e != '-']
+    if extra:
+        p.error(f"unrecognized arguments: {' '.join(extra)}")
+    return args
 
 def safe_run(cmd, dry_run=False):
     logger.info(" ".join(cmd))
