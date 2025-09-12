@@ -8,11 +8,13 @@ import shlex
 import logging
 import argparse
 import time
+import json
 from datetime import datetime
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
 LOGFILE = '/var/log/rog-syncobra/rog-syncobra.log'
+CACHE_FILE = '.raw_dedupe_cache.json'
 #────────────────────────────────────────────────────────────────────────────────
 
 # ─── Logging setup ─────────────────────────────────────────────────────────────
@@ -171,10 +173,35 @@ def metadata_dedupe(path, dry_run=False):
     logger.info(f"Metadata dedupe: {' '.join(cmd)}")
     safe_run(cmd, dry_run)
 
+def load_cache(root):
+    """Load dedupe cache from ROOT directory."""
+    path = os.path.join(root, CACHE_FILE)
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+def save_cache(root, cache):
+    """Write dedupe cache back to ROOT directory."""
+    path = os.path.join(root, CACHE_FILE)
+    try:
+        pruned = {p: meta for p, meta in cache.items() if os.path.exists(p)}
+        with open(path, 'w') as f:
+            json.dump(pruned, f)
+    except Exception as e:
+        logger.warning(f"Failed to write cache {path}: {e}")
+
 def raw_dedupe(src, dest, dry_run=False, recursive=False):
     src_abs  = os.path.abspath(src)
     dest_abs = os.path.abspath(dest) if dest else src_abs
     logger.info(f"Raw dedupe: {src_abs} ↔ {dest_abs}")
+
+    src_cache = load_cache(src_abs)
+    dest_cache = src_cache if dest_abs == src_abs else load_cache(dest_abs)
 
     if dest and dest_abs != src_abs:
         doppelt = os.path.join(dest_abs, 'doppelt')
@@ -194,28 +221,42 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
         for root, dirs, files in os.walk(src_abs):
             if not recursive: dirs.clear()
             for fn in files:
-                if os.path.splitext(fn)[1].lower() not in MEDIA_EXTS: continue
-                p = os.path.join(root, fn)
-                cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
-                try:
-                    out = subprocess.check_output(cmd, shell=True)
-                    h = out.decode().split()[0]
-                except subprocess.CalledProcessError:
+                if os.path.splitext(fn)[1].lower() not in MEDIA_EXTS:
                     continue
+                p = os.path.join(root, fn)
+                st = os.stat(p)
+                meta = src_cache.get(p)
+                if meta and meta.get('mtime') == st.st_mtime and meta.get('size') == st.st_size:
+                    h = meta.get('hash')
+                else:
+                    cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
+                    try:
+                        out = subprocess.check_output(cmd, shell=True)
+                        h = out.decode().split()[0]
+                    except subprocess.CalledProcessError:
+                        continue
+                    src_cache[p] = {'mtime': st.st_mtime, 'size': st.st_size, 'hash': h}
                 tmp_src.write(f"{h}\t{p}\n")
 
         # hash dest
         for root, dirs, files in os.walk(dest_abs):
             if not recursive: dirs.clear()
             for fn in files:
-                if os.path.splitext(fn)[1].lower() not in MEDIA_EXTS: continue
-                p = os.path.join(root, fn)
-                cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
-                try:
-                    out = subprocess.check_output(cmd, shell=True)
-                    h = out.decode().split()[0]
-                except subprocess.CalledProcessError:
+                if os.path.splitext(fn)[1].lower() not in MEDIA_EXTS:
                     continue
+                p = os.path.join(root, fn)
+                st = os.stat(p)
+                meta = dest_cache.get(p)
+                if meta and meta.get('mtime') == st.st_mtime and meta.get('size') == st.st_size:
+                    h = meta.get('hash')
+                else:
+                    cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
+                    try:
+                        out = subprocess.check_output(cmd, shell=True)
+                        h = out.decode().split()[0]
+                    except subprocess.CalledProcessError:
+                        continue
+                    dest_cache[p] = {'mtime': st.st_mtime, 'size': st.st_size, 'hash': h}
                 tmp_dest.write(f"{h}\t{p}\n")
 
         tmp_src.flush(); tmp_dest.flush()
@@ -256,6 +297,9 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
         logger.info(f"{freed} bytes freed")
 
     finally:
+        save_cache(src_abs, src_cache)
+        if dest_cache is not src_cache:
+            save_cache(dest_abs, dest_cache)
         for fh in (tmp_src, tmp_dest):
             try:
                 fh.close()
