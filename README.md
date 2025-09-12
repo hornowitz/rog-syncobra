@@ -52,6 +52,7 @@ sudo mkdir -p /etc/rog-syncobra
 sudo tee /etc/rog-syncobra/example.conf <<'EOF'
 INPUTDIR=/path/to/watch
 DESTDIR=/path/to/destination
+# Additional rog-syncobra.py options (space-separated)
 EXTRA_ARGS=""
 EOF
 
