@@ -358,7 +358,19 @@ def exif_sort(src, dest, args):
         ]
         run(cmd)
 
-    # 5) Main DCIM & misc
+    # 5) AndroidModel-specific timestamp fixes
+    logger.info("AndroidModel A059P timestamp fix")
+    cmd = [
+        'exiftool', vflag, *recur,
+        '-if', "$AndroidModel eq 'A059P'",
+        '-alldates<FileModifyDate',
+        '-overwrite_original_in_place','-P','-fast2',
+        '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
+        '-ext+','VOB','-ext+','3GP','-ext+','AVI','.'
+    ]
+    run(cmd)
+
+    # 6) Main DCIM & misc
     logger.info("DCIM & misc processing")
     cmd = [
         'exiftool', vflag, *recur,
