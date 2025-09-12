@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 # Load instance-specific settings from /etc/rog-syncobra/<instance>.conf
 EnvironmentFile=/etc/rog-syncobra/%i.conf
-ExecStart=/usr/bin/env python3 /usr/local/bin/rog-syncobra.py --watch \\
+ExecStart=/usr/bin/env python3 /usr/local/bin/rog-syncobra.py --watch \
   --inputdir ${INPUTDIR} --move2targetdir ${DESTDIR} ${EXTRA_ARGS}
 Restart=on-failure
 StandardOutput=journal
