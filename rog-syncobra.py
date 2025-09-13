@@ -367,7 +367,6 @@ def exif_sort(src, dest, args):
     logger.info("Screenshots tagging")
     base_if = (
         r"$filename=~/screenshot/i or "
-        r"$ProfileCopyright=~/google inc\. 2016/i and "
         r"$jfifversion=~/1\.01/i or "
         r"$UserComment=~/screenshot/i"
     )
