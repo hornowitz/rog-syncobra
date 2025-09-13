@@ -135,62 +135,72 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         return path, digest
 
     progress = tqdm(total=len(all_files), unit="file", disable=not show_progress)
-    with ThreadPoolExecutor(max_workers=threads) as ex:
-        for path, digest in ex.map(hash_with_cache, all_files):
-            if digest:
-                hash_map[digest].append(path)
-            progress.update(1)
-    progress.close()
-
-    for digest, group in hash_map.items():
-        if len(group) < 2:
-            continue
-        strong_map: defaultdict[str, list[Path]] = defaultdict(list)
-        for f in group:
-            root = root_map[f]
+    try:
+        with ThreadPoolExecutor(max_workers=threads) as ex:
+            it = ex.map(hash_with_cache, all_files)
             try:
-                stat = f.stat()
-            except OSError as e:
-                logger.warning("Skipping %s: %s", f, e)
-                continue
-            rel = str(f.relative_to(root))
-            cache = cache_map.get(root, {})
-            entry = cache.get(rel)
-            strong_digest: str | None = None
-            if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
-                strong_digest = entry.get('blake2b')
-            if not strong_digest:
-                _, strong_digest = file_hash(f, strip_metadata, 'blake2b')
-                if strong_digest:
-                    cache.setdefault(rel, {
-                        'size': stat.st_size,
-                        'mtime': stat.st_mtime,
-                        'xxh64': entry.get('xxh64') or entry.get('hash') if entry else None,
-                    })['blake2b'] = strong_digest
-            if strong_digest:
-                strong_map[strong_digest].append(f)
-        for strong_digest, files in strong_map.items():
-            if len(files) < 2:
-                continue
-            group_sorted = sorted(files)
-            logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
-            if delete:
-                for f in group_sorted[1:]:
-                    if dry_run:
-                        logger.info("Would delete %s", f)
-                    else:
-                        current_digest = file_hash(f, strip_metadata, 'blake2b')[1]
-                        if current_digest == strong_digest:
-                            try:
-                                f.unlink()
-                                logger.info("Deleted %s", f)
-                            except OSError as e:
-                                logger.error("Failed to delete %s: %s", f, e)
-                        else:
-                            logger.warning("Skipped deletion for %s: file changed since hashing", f)
+                for path, digest in it:
+                    if digest:
+                        hash_map[digest].append(path)
+                    progress.update(1)
+            except KeyboardInterrupt:
+                logger.warning("Interrupted during hashing; processing partial results")
+                ex.shutdown(cancel_futures=True)
+    finally:
+        progress.close()
 
-    for root, cache in cache_map.items():
-        save_cache(root, cache, strip_metadata)
+    try:
+        for digest, group in hash_map.items():
+            if len(group) < 2:
+                continue
+            strong_map: defaultdict[str, list[Path]] = defaultdict(list)
+            for f in group:
+                root = root_map[f]
+                try:
+                    stat = f.stat()
+                except OSError as e:
+                    logger.warning("Skipping %s: %s", f, e)
+                    continue
+                rel = str(f.relative_to(root))
+                cache = cache_map.get(root, {})
+                entry = cache.get(rel)
+                strong_digest: str | None = None
+                if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                    strong_digest = entry.get('blake2b')
+                if not strong_digest:
+                    _, strong_digest = file_hash(f, strip_metadata, 'blake2b')
+                    if strong_digest:
+                        cache.setdefault(rel, {
+                            'size': stat.st_size,
+                            'mtime': stat.st_mtime,
+                            'xxh64': entry.get('xxh64') or entry.get('hash') if entry else None,
+                        })['blake2b'] = strong_digest
+                if strong_digest:
+                    strong_map[strong_digest].append(f)
+            for strong_digest, files in strong_map.items():
+                if len(files) < 2:
+                    continue
+                group_sorted = sorted(files)
+                logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
+                if delete:
+                    for f in group_sorted[1:]:
+                        if dry_run:
+                            logger.info("Would delete %s", f)
+                        else:
+                            current_digest = file_hash(f, strip_metadata, 'blake2b')[1]
+                            if current_digest == strong_digest:
+                                try:
+                                    f.unlink()
+                                    logger.info("Deleted %s", f)
+                                except OSError as e:
+                                    logger.error("Failed to delete %s: %s", f, e)
+                            else:
+                                logger.warning("Skipped deletion for %s: file changed since hashing", f)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted during duplicate verification; saving cache")
+    finally:
+        for root, cache in cache_map.items():
+            save_cache(root, cache, strip_metadata)
 
 
 def main():
@@ -208,9 +218,12 @@ def main():
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
                         format='%(levelname)s: %(message)s')
 
-    find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
-                    threads=args.threads, show_progress=not args.no_progress,
-                    strip_metadata=args.strip_metadata)
+    try:
+        find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
+                        threads=args.threads, show_progress=not args.no_progress,
+                        strip_metadata=args.strip_metadata)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user")
 
 
 if __name__ == '__main__':
