@@ -12,9 +12,9 @@ The script relies on a few external programs:
 - standard Unix tools such as `sort`, `du` and `df`
 
 For metadata or raw-data deduplication an internal script `xxrdfind.py`
-(based on xxhash64) is included, removing the need for the external
-`rdfind` utility.  Using its `--strip-metadata` option allows deduplication
-based solely on media content.
+(xxhash64 with BLAKE2b confirmation) is included, removing the need for the
+external `rdfind` utility. Using its `--strip-metadata` option allows
+deduplication based solely on media content.
 
 To automatically install missing packages run:
 

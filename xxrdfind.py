@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import subprocess
 import json
+import hashlib
 import xxhash
 from tqdm import tqdm
 
@@ -56,8 +57,13 @@ def save_cache(root: Path, cache: dict, strip_metadata: bool) -> None:
         logger.warning("Failed to save cache %s: %s", path, e)
 
 
-def file_hash(path: Path, strip_metadata: bool = False) -> tuple[Path, str | None]:
-    h = xxhash.xxh64()
+def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64') -> tuple[Path, str | None]:
+    if algorithm == 'xxh64':
+        h = xxhash.xxh64()
+    elif algorithm == 'blake2b':
+        h = hashlib.blake2b(digest_size=32)
+    else:
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
     try:
         if strip_metadata:
             cmd = ['exiftool', '-all=', '-o', '-', str(path)]
@@ -91,7 +97,9 @@ def iter_files(paths):
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True, strip_metadata=False):
     all_files = list(iter_files(paths))
     cache_map: dict[Path, dict] = {}
+    root_map: dict[Path, Path] = {}
     for f, root in all_files:
+        root_map[f] = root
         if root not in cache_map:
             cache_map[root] = load_cache(root, strip_metadata)
 
@@ -111,15 +119,19 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         cache = cache_map.get(root, {})
         entry = cache.get(rel)
         if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
-            digest = entry.get('hash')
+            digest = entry.get('xxh64') or entry.get('hash')
         if not digest:
-            _, digest = file_hash(path, strip_metadata)
+            _, digest = file_hash(path, strip_metadata, 'xxh64')
             if digest:
                 cache_map.setdefault(root, {})[rel] = {
                     'size': stat.st_size,
                     'mtime': stat.st_mtime,
-                    'hash': digest,
+                    'xxh64': digest,
+                    **({'blake2b': entry['blake2b']} if entry and 'blake2b' in entry else {}),
                 }
+        else:
+            if entry and 'xxh64' not in entry:
+                entry['xxh64'] = digest
         return path, digest
 
     progress = tqdm(total=len(all_files), unit="file", disable=not show_progress)
@@ -130,28 +142,55 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             progress.update(1)
     progress.close()
 
-    for root, cache in cache_map.items():
-        save_cache(root, cache, strip_metadata)
-
     for digest, group in hash_map.items():
         if len(group) < 2:
             continue
-        group_sorted = sorted(group)
-        logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
-        if delete:
-            for f in group_sorted[1:]:
-                if dry_run:
-                    logger.info("Would delete %s", f)
-                else:
-                    current_digest = file_hash(f, strip_metadata)[1]
-                    if current_digest == digest:
-                        try:
-                            f.unlink()
-                            logger.info("Deleted %s", f)
-                        except OSError as e:
-                            logger.error("Failed to delete %s: %s", f, e)
+        strong_map: defaultdict[str, list[Path]] = defaultdict(list)
+        for f in group:
+            root = root_map[f]
+            try:
+                stat = f.stat()
+            except OSError as e:
+                logger.warning("Skipping %s: %s", f, e)
+                continue
+            rel = str(f.relative_to(root))
+            cache = cache_map.get(root, {})
+            entry = cache.get(rel)
+            strong_digest: str | None = None
+            if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                strong_digest = entry.get('blake2b')
+            if not strong_digest:
+                _, strong_digest = file_hash(f, strip_metadata, 'blake2b')
+                if strong_digest:
+                    cache.setdefault(rel, {
+                        'size': stat.st_size,
+                        'mtime': stat.st_mtime,
+                        'xxh64': entry.get('xxh64') or entry.get('hash') if entry else None,
+                    })['blake2b'] = strong_digest
+            if strong_digest:
+                strong_map[strong_digest].append(f)
+        for strong_digest, files in strong_map.items():
+            if len(files) < 2:
+                continue
+            group_sorted = sorted(files)
+            logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
+            if delete:
+                for f in group_sorted[1:]:
+                    if dry_run:
+                        logger.info("Would delete %s", f)
                     else:
-                        logger.warning("Skipped deletion for %s: file changed since hashing", f)
+                        current_digest = file_hash(f, strip_metadata, 'blake2b')[1]
+                        if current_digest == strong_digest:
+                            try:
+                                f.unlink()
+                                logger.info("Deleted %s", f)
+                            except OSError as e:
+                                logger.error("Failed to delete %s: %s", f, e)
+                        else:
+                            logger.warning("Skipped deletion for %s: file changed since hashing", f)
+
+    for root, cache in cache_map.items():
+        save_cache(root, cache, strip_metadata)
 
 
 def main():
