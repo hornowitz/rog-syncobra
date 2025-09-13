@@ -212,7 +212,6 @@ def exif_sort(src, dest, args):
     logger.info("Screenshots tagging")
     base_if = (
         r"$filename=~/screenshot/i or "
-        r"$jfifversion=~/1\.01/i or "
         r"$UserComment=~/screenshot/i"
     )
     for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
