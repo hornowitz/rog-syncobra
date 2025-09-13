@@ -23,6 +23,7 @@ from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import os
+import subprocess
 import xxhash
 from tqdm import tqdm
 
@@ -31,12 +32,26 @@ CHUNK_SIZE = 1 << 20  # 1 MB
 logger = logging.getLogger("xxrdfind")
 
 
-def file_hash(path: Path) -> tuple[Path, str]:
+def file_hash(path: Path, strip_metadata: bool = False) -> tuple[Path, str | None]:
     h = xxhash.xxh64()
-    with path.open('rb') as f:
-        for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
-            h.update(chunk)
-    return path, h.hexdigest()
+    try:
+        if strip_metadata:
+            cmd = ['exiftool', '-all=', '-o', '-', str(path)]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            assert proc.stdout is not None
+            with proc.stdout as f:
+                for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
+                    h.update(chunk)
+            if proc.wait() != 0:
+                raise RuntimeError('exiftool failed')
+        else:
+            with path.open('rb') as f:
+                for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
+                    h.update(chunk)
+        return path, h.hexdigest()
+    except Exception as e:
+        logger.warning("Hash failed for %s: %s", path, e)
+        return path, None
 
 
 def iter_files(paths):
@@ -49,7 +64,7 @@ def iter_files(paths):
                     yield sub
 
 
-def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True):
+def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True, strip_metadata=False):
     size_map = defaultdict(list)
     all_files = list(iter_files(paths))
     for f in all_files:
@@ -67,8 +82,9 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
 
     progress = tqdm(total=len(files_to_hash), unit="file", disable=not show_progress)
     with ThreadPoolExecutor(max_workers=threads) as ex:
-        for path, digest in ex.map(file_hash, files_to_hash):
-            hash_map[digest].append(path)
+        for path, digest in ex.map(lambda p: file_hash(p, strip_metadata), files_to_hash):
+            if digest:
+                hash_map[digest].append(path)
             progress.update(1)
     progress.close()
 
@@ -96,13 +112,16 @@ def main():
     p.add_argument('--threads', type=int, default=0, help="Worker threads")
     p.add_argument('--log-level', default='INFO', help="Logging level")
     p.add_argument('--no-progress', action='store_true', help="Disable progress bar")
+    p.add_argument('--strip-metadata', action='store_true',
+                   help="Hash file content with metadata removed")
     args = p.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
                         format='%(levelname)s: %(message)s')
 
     find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
-                    threads=args.threads, show_progress=not args.no_progress)
+                    threads=args.threads, show_progress=not args.no_progress,
+                    strip_metadata=args.strip_metadata)
 
 
 if __name__ == '__main__':
