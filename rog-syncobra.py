@@ -63,7 +63,6 @@ def install_requirements():
     packages = {
         'exiftool': 'libimage-exiftool-perl',
         'xxhsum': 'xxhash',
-        'rdfind': 'rdfind',
         'inotifywait': 'inotify-tools',
     }
     missing = [pkg for prog, pkg in packages.items() if not shutil.which(prog)]
@@ -84,9 +83,9 @@ def parse_args():
     p.add_argument('-d','--ddwometadata', action='store_true',
                    help="Raw dedupe by data (XXH64) between source & dest")
     p.add_argument('-D','--deldupi', action='store_true',
-                   help="Metadata dedupe by rdfind on source")
+                   help="Metadata dedupe by xxhash rdfind-like scanner on source")
     p.add_argument('-X','--deldupidest', action='store_true',
-                   help="Metadata dedupe by rdfind on destination")
+                   help="Metadata dedupe by xxhash rdfind-like scanner on destination")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
@@ -171,9 +170,12 @@ def check_year_mount(dest):
     logger.info(f"Verified mountpoint for {year_dir}")
 
 def metadata_dedupe(path, dry_run=False):
-    cmd = ['rdfind','-deleteduplicates','true', path]
+    script = os.path.join(os.path.dirname(__file__), 'xxrdfind.py')
+    cmd = [sys.executable, script, '--delete', path]
+    if dry_run:
+        cmd.append('--dry-run')
     logger.info(f"Metadata dedupe: {' '.join(cmd)}")
-    safe_run(cmd, dry_run)
+    safe_run(cmd, False)
 
 def load_cache(root):
     """Load dedupe cache from ROOT directory."""
@@ -564,7 +566,7 @@ def main():
     if args.install_deps:
         install_requirements()
         return
-    for cmd in ('exiftool','xxhsum','rdfind','sort','du','df'):
+    for cmd in ('exiftool','xxhsum','sort','du','df'):
         check_program(cmd)
     if args.watch:
         check_program('inotifywait')

@@ -8,9 +8,11 @@ The script relies on a few external programs:
 
 - `libimage-exiftool-perl` (provides `exiftool`)
 - `xxhash` (provides `xxhsum`)
-- `rdfind`
 - `inotify-tools` (required only for `--watch` mode)
 - standard Unix tools such as `sort`, `du` and `df`
+
+For metadata deduplication an internal script `xxrdfind.py` (based on
+xxhash64) is included, removing the need for the external `rdfind` utility.
 
 To automatically install missing packages run:
 
@@ -22,8 +24,8 @@ To automatically install missing packages run:
 
 - `-r, --recursive` – recurse into subdirectories
 - `-d, --ddwometadata` – raw dedupe by XXH64 between source and destination
-- `-D, --deldupi` – metadata dedupe by rdfind on source
-- `-X, --deldupidest` – metadata dedupe by rdfind on destination
+- `-D, --deldupi` – metadata dedupe by bundled xxhash scanner on source
+- `-X, --deldupidest` – metadata dedupe by bundled xxhash scanner on destination
 - `-y, --year-month-sort` – sort into `Year/Month` directories (default on)
 - `-Y, --check-year-mount` – verify that the current year's folder under the
   destination exists and is a mountpoint
