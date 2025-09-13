@@ -33,12 +33,13 @@ CHUNK_SIZE = 1 << 20  # 1 MB
 logger = logging.getLogger("xxrdfind")
 
 
-def _cache_file(root: Path) -> Path:
-    return root / '.xxrdfind_cache.json'
+def _cache_file(root: Path, strip_metadata: bool) -> Path:
+    suffix = '_stripped' if strip_metadata else ''
+    return root / f'.xxrdfind_cache{suffix}.json'
 
 
-def load_cache(root: Path) -> dict:
-    path = _cache_file(root)
+def load_cache(root: Path, strip_metadata: bool) -> dict:
+    path = _cache_file(root, strip_metadata)
     if path.exists():
         try:
             return json.loads(path.read_text())
@@ -47,8 +48,8 @@ def load_cache(root: Path) -> dict:
     return {}
 
 
-def save_cache(root: Path, cache: dict) -> None:
-    path = _cache_file(root)
+def save_cache(root: Path, cache: dict, strip_metadata: bool) -> None:
+    path = _cache_file(root, strip_metadata)
     try:
         path.write_text(json.dumps(cache))
     except Exception as e:
@@ -92,8 +93,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
     all_files = list(iter_files(paths))
     cache_map: dict[Path, dict] = {}
     for f, root in all_files:
-        if root not in cache_map and not strip_metadata:
-            cache_map[root] = load_cache(root)
+        if root not in cache_map:
+            cache_map[root] = load_cache(root, strip_metadata)
         try:
             size_map[f.stat().st_size].append((f, root))
         except OSError as e:
@@ -111,14 +112,13 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         stat = path.stat()
         rel = str(path.relative_to(root))
         digest: str | None = None
-        if not strip_metadata:
-            cache = cache_map.get(root, {})
-            entry = cache.get(rel)
-            if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
-                digest = entry.get('hash')
+        cache = cache_map.get(root, {})
+        entry = cache.get(rel)
+        if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+            digest = entry.get('hash')
         if not digest:
             _, digest = file_hash(path, strip_metadata)
-            if digest and not strip_metadata:
+            if digest:
                 cache_map.setdefault(root, {})[rel] = {
                     'size': stat.st_size,
                     'mtime': stat.st_mtime,
@@ -134,9 +134,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             progress.update(1)
     progress.close()
 
-    if not strip_metadata:
-        for root, cache in cache_map.items():
-            save_cache(root, cache)
+    for root, cache in cache_map.items():
+        save_cache(root, cache, strip_metadata)
 
     for digest, group in hash_map.items():
         if len(group) < 2:
