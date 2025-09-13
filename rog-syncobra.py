@@ -99,6 +99,8 @@ def parse_args():
                    help="Show actions without executing")
     p.add_argument('--debug', action='store_true',
                    help="Verbose exiftool (-v); default is quiet (-q)")
+    p.add_argument('--verify-before-delete', action='store_true',
+                   help="Rehash source and destination before deleting duplicates")
     p.add_argument('-W','--watch', action='store_true',
                    help="Watch mode: monitor for CLOSE_WRITE events")
     p.add_argument('-I','--inputdir', default=os.getcwd(),
@@ -195,7 +197,7 @@ def save_cache(root, cache):
     except Exception as e:
         logger.warning(f"Failed to write cache {path}: {e}")
 
-def raw_dedupe(src, dest, dry_run=False, recursive=False):
+def raw_dedupe(src, dest, dry_run=False, recursive=False, verify_before_delete=False):
     src_abs  = os.path.abspath(src)
     dest_abs = os.path.abspath(dest) if dest else src_abs
     logger.info(f"Raw dedupe: {src_abs} ↔ {dest_abs}")
@@ -208,6 +210,24 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
     else:
         doppelt = os.path.join(src_abs,  'doppelt')
     os.makedirs(doppelt, exist_ok=True)
+
+    def ensure_hash(p, cache, force=False):
+        try:
+            st = os.stat(p)
+        except OSError:
+            cache.pop(p, None)
+            return None
+        meta = cache.get(p)
+        if force or not meta or meta.get('mtime') != st.st_mtime or meta.get('size') != st.st_size:
+            cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
+            try:
+                out = subprocess.check_output(cmd, shell=True)
+                h = out.decode().split()[0]
+            except subprocess.CalledProcessError:
+                return None
+            cache[p] = {'mtime': st.st_mtime, 'size': st.st_size, 'hash': h}
+            return h
+        return meta.get('hash')
 
     MEDIA_EXTS = {'.jpg','.jpeg','.png','.heic',
                   '.mp4','.mov','.3gp','.mts','.vob','.avi','.mpg'}
@@ -275,14 +295,26 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
             ld = fdst.readline()
             while ls and ld:
                 h_src, p_src = ls.rstrip().split('\t',1)
-                h_dst, _     = ld.rstrip().split('\t',1)
+                h_dst, p_dst = ld.rstrip().split('\t',1)
                 if h_src < h_dst:
                     ls = fsrc.readline()
                 elif h_src > h_dst:
                     ld = fdst.readline()
                 else:
+                    dst_hash = ensure_hash(p_dst, dest_cache, force=verify_before_delete)
+                    if not dst_hash or dst_hash != h_src:
+                        ld = fdst.readline()
+                        continue
                     while ls and ls.startswith(h_src):
                         _, p = ls.rstrip().split('\t',1)
+                        dst_hash = ensure_hash(p_dst, dest_cache, force=verify_before_delete)
+                        if not dst_hash or dst_hash != h_src:
+                            break
+                        if verify_before_delete:
+                            src_hash = ensure_hash(p, src_cache, force=True)
+                            if not src_hash or src_hash != dst_hash:
+                                ls = fsrc.readline()
+                                continue
                         target = os.path.join(doppelt, os.path.basename(p))
                         if dry_run:
                             logger.info(f"[DRY] mv {p} → {target}")
@@ -292,7 +324,7 @@ def raw_dedupe(src, dest, dry_run=False, recursive=False):
                             shutil.move(p, target)
                             logger.info(f"Moved duplicate: {p}")
                         ls = fsrc.readline()
-                    while ld and ld.startswith(h_dst):
+                    while ld and ld.startswith(h_src):
                         ld = fdst.readline()
         logger.info(f"{freed} bytes freed")
 
@@ -519,7 +551,7 @@ def pipeline(args):
     if args.deldupi:
         metadata_dedupe(src, args.dry_run)
     if args.ddwometadata:
-        raw_dedupe(src, dest, args.dry_run, args.recursive)
+        raw_dedupe(src, dest, args.dry_run, args.recursive, args.verify_before_delete)
     exif_sort(src, dest, args)
     if args.archive_dir:
         archive_old(dest if args.move2targetdir else src,
