@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-xxrdfind.py - xxhash64-based duplicate finder with caching, logging, dry-run,
-multithreading and progress display. Designed as a lightweight replacement for
-rdfind for use within rog-syncobra.
+xxrdfind.py - xxhash64-based duplicate finder with persistent hashing cache,
+logging, dry-run, multithreading and progress display. Designed as a
+lightweight replacement for rdfind for use within rog-syncobra.
 
 Usage:
     ./xxrdfind.py [options] DIR [DIR ...]
@@ -89,19 +89,11 @@ def iter_files(paths):
 
 
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True, strip_metadata=False):
-    size_map: defaultdict[int, list[tuple[Path, Path]]] = defaultdict(list)
     all_files = list(iter_files(paths))
     cache_map: dict[Path, dict] = {}
     for f, root in all_files:
         if root not in cache_map:
             cache_map[root] = load_cache(root, strip_metadata)
-        try:
-            size_map[f.stat().st_size].append((f, root))
-        except OSError as e:
-            logger.warning("Skipping %s: %s", f, e)
-
-    candidates = [group for group in size_map.values() if len(group) > 1]
-    files_to_hash = [item for group in candidates for item in group]
 
     hash_map: defaultdict[str, list[Path]] = defaultdict(list)
     if threads is None or threads < 1:
@@ -109,7 +101,11 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
 
     def hash_with_cache(item: tuple[Path, Path]) -> tuple[Path, str | None]:
         path, root = item
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except OSError as e:
+            logger.warning("Skipping %s: %s", path, e)
+            return path, None
         rel = str(path.relative_to(root))
         digest: str | None = None
         cache = cache_map.get(root, {})
@@ -126,9 +122,9 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                 }
         return path, digest
 
-    progress = tqdm(total=len(files_to_hash), unit="file", disable=not show_progress)
+    progress = tqdm(total=len(all_files), unit="file", disable=not show_progress)
     with ThreadPoolExecutor(max_workers=threads) as ex:
-        for path, digest in ex.map(hash_with_cache, files_to_hash):
+        for path, digest in ex.map(hash_with_cache, all_files):
             if digest:
                 hash_map[digest].append(path)
             progress.update(1)
