@@ -3,18 +3,14 @@ import os
 import sys
 import shutil
 import subprocess
-import tempfile
-import shlex
 import logging
 import argparse
 import time
-import json
 from datetime import datetime
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
 LOGFILE = '/var/log/rog-syncobra/rog-syncobra.log'
-CACHE_FILE = '.raw_dedupe_cache.json'
 #────────────────────────────────────────────────────────────────────────────────
 
 # ─── Logging setup ─────────────────────────────────────────────────────────────
@@ -98,8 +94,6 @@ def parse_args():
                    help="Show actions without executing")
     p.add_argument('--debug', action='store_true',
                    help="Verbose exiftool (-v); default is quiet (-q)")
-    p.add_argument('--verify-before-delete', action='store_true',
-                   help="Rehash source and destination before deleting duplicates")
     p.add_argument('-W','--watch', action='store_true',
                    help="Watch mode: monitor for CLOSE_WRITE events")
     p.add_argument('-I','--inputdir', default=os.getcwd(),
@@ -169,179 +163,30 @@ def check_year_mount(dest):
         sys.exit(1)
     logger.info(f"Verified mountpoint for {year_dir}")
 
-def metadata_dedupe(path, dry_run=False):
+def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False):
     script = os.path.join(os.path.dirname(__file__), 'xxrdfind.py')
-    cmd = [sys.executable, script, '--delete', path]
+    cmd = [sys.executable, script, '--delete', *paths]
+    if strip_metadata:
+        cmd.append('--strip-metadata')
     if dry_run:
         cmd.append('--dry-run')
-    logger.info(f"Metadata dedupe: {' '.join(cmd)}")
+    logger.info(f"xxrdfind dedupe: {' '.join(cmd)}")
     safe_run(cmd, False)
 
-def load_cache(root):
-    """Load dedupe cache from ROOT directory."""
-    path = os.path.join(root, CACHE_FILE)
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-    return {}
 
-def save_cache(root, cache):
-    """Write dedupe cache back to ROOT directory."""
-    path = os.path.join(root, CACHE_FILE)
-    try:
-        pruned = {p: meta for p, meta in cache.items() if os.path.exists(p)}
-        with open(path, 'w') as f:
-            json.dump(pruned, f)
-    except Exception as e:
-        logger.warning(f"Failed to write cache {path}: {e}")
+def metadata_dedupe(path, dry_run=False):
+    xxrdfind_dedupe([path], dry_run, strip_metadata=False)
 
-def raw_dedupe(src, dest, dry_run=False, recursive=False, verify_before_delete=False):
-    src_abs  = os.path.abspath(src)
-    dest_abs = os.path.abspath(dest) if dest else src_abs
-    logger.info(f"Raw dedupe: {src_abs} ↔ {dest_abs}")
 
-    src_cache = load_cache(src_abs)
-    dest_cache = src_cache if dest_abs == src_abs else load_cache(dest_abs)
-
-    if dest and dest_abs != src_abs:
-        doppelt = os.path.join(dest_abs, 'doppelt')
-    else:
-        doppelt = os.path.join(src_abs,  'doppelt')
-    os.makedirs(doppelt, exist_ok=True)
-
-    def ensure_hash(p, cache, force=False):
-        try:
-            st = os.stat(p)
-        except OSError:
-            cache.pop(p, None)
-            return None
-        meta = cache.get(p)
-        if force or not meta or meta.get('mtime') != st.st_mtime or meta.get('size') != st.st_size:
-            cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
-            try:
-                out = subprocess.check_output(cmd, shell=True)
-                h = out.decode().split()[0]
-            except subprocess.CalledProcessError:
-                return None
-            cache[p] = {'mtime': st.st_mtime, 'size': st.st_size, 'hash': h}
-            return h
-        return meta.get('hash')
-
-    MEDIA_EXTS = {'.jpg','.jpeg','.png','.heic',
-                  '.mp4','.mov','.3gp','.mts','.vob','.avi','.mpg'}
-
-    tmp_src  = tempfile.NamedTemporaryFile('w+', delete=False)
-    tmp_dest = tempfile.NamedTemporaryFile('w+', delete=False)
-    sorted_src = sorted_dest = None
-
-    try:
-        # hash source
-        for root, dirs, files in os.walk(src_abs):
-            if not recursive: dirs.clear()
-            for fn in files:
-                if os.path.splitext(fn)[1].lower() not in MEDIA_EXTS:
-                    continue
-                p = os.path.join(root, fn)
-                st = os.stat(p)
-                meta = src_cache.get(p)
-                if meta and meta.get('mtime') == st.st_mtime and meta.get('size') == st.st_size:
-                    h = meta.get('hash')
-                else:
-                    cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
-                    try:
-                        out = subprocess.check_output(cmd, shell=True)
-                        h = out.decode().split()[0]
-                    except subprocess.CalledProcessError:
-                        continue
-                    src_cache[p] = {'mtime': st.st_mtime, 'size': st.st_size, 'hash': h}
-                tmp_src.write(f"{h}\t{p}\n")
-
-        # hash dest
-        for root, dirs, files in os.walk(dest_abs):
-            if not recursive: dirs.clear()
-            for fn in files:
-                if os.path.splitext(fn)[1].lower() not in MEDIA_EXTS:
-                    continue
-                p = os.path.join(root, fn)
-                st = os.stat(p)
-                meta = dest_cache.get(p)
-                if meta and meta.get('mtime') == st.st_mtime and meta.get('size') == st.st_size:
-                    h = meta.get('hash')
-                else:
-                    cmd = f"exiftool -all= -o - {shlex.quote(p)} 2>/dev/null | xxhsum -H64"
-                    try:
-                        out = subprocess.check_output(cmd, shell=True)
-                        h = out.decode().split()[0]
-                    except subprocess.CalledProcessError:
-                        continue
-                    dest_cache[p] = {'mtime': st.st_mtime, 'size': st.st_size, 'hash': h}
-                tmp_dest.write(f"{h}\t{p}\n")
-
-        tmp_src.flush(); tmp_dest.flush()
-        tmp_src.close(); tmp_dest.close()
-
-        # sort on disk
-        sorted_src  = tmp_src.name  + '.s'
-        sorted_dest = tmp_dest.name + '.s'
-        subprocess.run(['sort','-k1,1', tmp_src.name, '-o', sorted_src],  check=True)
-        subprocess.run(['sort','-k1,1', tmp_dest.name,'-o',  sorted_dest], check=True)
-
-        # merge‐join and move
-        freed = 0
-        with open(sorted_src) as fsrc, open(sorted_dest) as fdst:
-            ls = fsrc.readline()
-            ld = fdst.readline()
-            while ls and ld:
-                h_src, p_src = ls.rstrip().split('\t',1)
-                h_dst, p_dst = ld.rstrip().split('\t',1)
-                if h_src < h_dst:
-                    ls = fsrc.readline()
-                elif h_src > h_dst:
-                    ld = fdst.readline()
-                else:
-                    dst_hash = ensure_hash(p_dst, dest_cache, force=verify_before_delete)
-                    if not dst_hash or dst_hash != h_src:
-                        ld = fdst.readline()
-                        continue
-                    while ls and ls.startswith(h_src):
-                        _, p = ls.rstrip().split('\t',1)
-                        dst_hash = ensure_hash(p_dst, dest_cache, force=verify_before_delete)
-                        if not dst_hash or dst_hash != h_src:
-                            break
-                        if verify_before_delete:
-                            src_hash = ensure_hash(p, src_cache, force=True)
-                            if not src_hash or src_hash != dst_hash:
-                                ls = fsrc.readline()
-                                continue
-                        target = os.path.join(doppelt, os.path.basename(p))
-                        if dry_run:
-                            logger.info(f"[DRY] mv {p} → {target}")
-                        else:
-                            size = os.path.getsize(p)
-                            freed += size
-                            shutil.move(p, target)
-                            logger.info(f"Moved duplicate: {p}")
-                        ls = fsrc.readline()
-                    while ld and ld.startswith(h_src):
-                        ld = fdst.readline()
-        logger.info(f"{freed} bytes freed")
-
-    finally:
-        save_cache(src_abs, src_cache)
-        if dest_cache is not src_cache:
-            save_cache(dest_abs, dest_cache)
-        for fh in (tmp_src, tmp_dest):
-            try:
-                fh.close()
-            except Exception:
-                pass
-        for fn in (tmp_src.name, tmp_dest.name, sorted_src, sorted_dest):
-            if fn and os.path.exists(fn):
-                os.unlink(fn)
+def raw_dedupe(src, dest, dry_run=False, *_, **__):
+    paths = []
+    dest_abs = os.path.abspath(dest) if dest else None
+    src_abs = os.path.abspath(src)
+    if dest_abs and dest_abs != src_abs:
+        paths.append(dest_abs)
+    paths.append(src_abs)
+    logger.info(f"Raw dedupe via xxrdfind: {' '.join(paths)}")
+    xxrdfind_dedupe(paths, dry_run, strip_metadata=True)
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
@@ -552,7 +397,7 @@ def pipeline(args):
     if args.deldupi:
         metadata_dedupe(src, args.dry_run)
     if args.ddwometadata:
-        raw_dedupe(src, dest, args.dry_run, args.recursive, args.verify_before_delete)
+        raw_dedupe(src, dest, args.dry_run)
     exif_sort(src, dest, args)
     if args.archive_dir:
         archive_old(dest if args.move2targetdir else src,
