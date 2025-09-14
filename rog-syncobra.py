@@ -379,9 +379,8 @@ def archive_old(src, archive_dir, years, dry_run=False):
     cutoff_year  = now.year - years
     cutoff_month = now.month
 
-    # Gather all candidate folders and accumulate their total size
+    # Gather candidate folders to move
     to_move = []    # list of (src_path, dest_path)
-    total_size = 0
 
     for year_entry in os.scandir(src_abs):
         if not year_entry.is_dir() or not year_entry.name.isdigit():
@@ -395,15 +394,22 @@ def archive_old(src, archive_dir, years, dry_run=False):
             if (y < cutoff_year) or (y == cutoff_year and m < cutoff_month):
                 src_path  = month_entry.path
                 dest_path = os.path.join(arch_abs, year_entry.name, month_entry.name)
-                # sum sizes of all files in this folder
-                for root, _, files in os.walk(src_path):
-                    for fn in files:
-                        fp = os.path.join(root, fn)
-                        try:
-                            total_size += os.path.getsize(fp)
-                        except OSError:
-                            pass
                 to_move.append((src_path, dest_path))
+
+    # Aggregate sizes of directories to move
+    total_size = 0
+    for src_path, _ in to_move:
+        try:
+            res = subprocess.run(
+                ['du', '-sb', src_path],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            size = int(res.stdout.split()[0])
+            total_size += size
+        except Exception as e:
+            logger.warning(f"Could not determine size of {src_path}: {e}")
 
     # Check archive free space
     stat = shutil.disk_usage(arch_abs)
