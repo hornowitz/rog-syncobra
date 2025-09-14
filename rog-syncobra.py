@@ -195,8 +195,43 @@ def exif_sort(src, dest, args):
     recur = ['-r'] if args.recursive else []
     ym = '%Y/%m' if args.year_month_sort else '.'
 
+    # Persistent exiftool process to reuse directory traversal and metadata
+    # reads.  Commands are fed via stdin and executed with the "-stay_open"
+    # interface so we only spawn exiftool once.
+    proc = None
+    if not args.dry_run:
+        proc = subprocess.Popen(
+            ['exiftool', '-stay_open', 'True', '-@', '-'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
     def run(cmd):
-        safe_run(cmd, args.dry_run)
+        logger.info(" ".join(cmd))
+        if args.dry_run:
+            return
+        assert proc and proc.stdin and proc.stdout
+        # exiftool expects one argument per line when using -@ -
+        proc.stdin.write("\n".join(cmd[1:]) + "\n-execute\n")
+        proc.stdin.flush()
+
+        # Emit exiftool output so each operation is logged individually
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.rstrip()
+            if line == '{ready}':
+                break
+            if line.lower().startswith('error'):
+                logger.error(line)
+            elif 'warning' in line.lower():
+                logger.warning(line)
+            elif line:
+                logger.info(line)
 
     # 1) HEIC
     logger.info("HEIC processing")
@@ -317,6 +352,11 @@ def exif_sort(src, dest, args):
     run(cmd)
 
     os.chdir(cwd)
+    if proc:
+        # Shut down the persistent exiftool process
+        proc.stdin.write("-stay_open\nFalse\n")
+        proc.stdin.flush()
+        proc.communicate()
 
 def archive_old(src, archive_dir, years, dry_run=False):
     """
