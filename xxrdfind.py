@@ -8,14 +8,14 @@ Usage:
     ./xxrdfind.py [options] DIR [DIR ...]
 
 Options:
-    -d, --delete          Remove duplicate files, keeping first instance.
-    -n, --dry-run         Show actions without deleting files.
+    -d, --delete          Remove duplicate files, keeping first instance (default: keep files).
+    -n, --dry-run         Show actions without deleting files (default: false).
     -t, --threads N       Number of hashing worker threads (default: CPU count).
     -l, --log-level L     Logging level (DEBUG, INFO, WARNING; default INFO).
-    -p, --no-progress     Disable progress bar.
-    -s, --strip-metadata  Hash file content with metadata removed.
-    -r, --recursive       Recurse into subdirectories (use --no-recursive to disable).
-    -c, --cache           Use persistent hash cache (use --no-cache to disable).
+    -p, --no-progress     Disable progress bar (default: show progress).
+    -s, --strip-metadata  Hash file content with metadata removed (default: include metadata).
+    -r, --recursive       Recurse into subdirectories (default: enabled; use --no-recursive to disable).
+    -c, --cache           Use persistent hash cache (default: enabled; use --no-cache to disable).
 """
 
 from __future__ import annotations
@@ -46,9 +46,13 @@ def load_cache(root: Path, strip_metadata: bool) -> dict:
     path = _cache_file(root, strip_metadata)
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            data = json.loads(path.read_text())
+            logger.debug("Loaded cache %s (%d entries)", path, len(data))
+            return data
         except Exception as e:
             logger.warning("Failed to load cache %s: %s", path, e)
+    else:
+        logger.debug("No cache file %s", path)
     return {}
 
 
@@ -56,6 +60,7 @@ def save_cache(root: Path, cache: dict, strip_metadata: bool) -> None:
     path = _cache_file(root, strip_metadata)
     try:
         path.write_text(json.dumps(cache))
+        logger.debug("Saved cache %s (%d entries)", path, len(cache))
     except Exception as e:
         logger.warning("Failed to save cache %s: %s", path, e)
 
@@ -81,7 +86,9 @@ def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64'
             with path.open('rb') as f:
                 for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
                     h.update(chunk)
-        return path, h.hexdigest()
+        digest = h.hexdigest()
+        logger.debug("Hashed %s with %s -> %s", path, algorithm, digest)
+        return path, digest
     except Exception as e:
         logger.warning("Hash failed for %s: %s", path, e)
         return path, None
@@ -89,18 +96,22 @@ def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64'
 
 def iter_files(paths, recursive: bool = True):
     for p in paths:
+        logger.debug("Scanning %s", p)
         if p.is_file():
+            logger.debug("Found file %s", p)
             yield p, p.parent
         elif p.is_dir():
             iterator = p.rglob('*') if recursive else p.iterdir()
             for sub in iterator:
                 if sub.is_file():
+                    logger.debug("Found file %s", sub)
                     yield sub, p
 
 
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True,
                     strip_metadata=False, recursive: bool = True, use_cache: bool = True):
     raw_files = list(iter_files(paths, recursive))
+    logger.debug("Found %d files to process", len(raw_files))
     cache_map: dict[Path, dict] = {}
     root_map: dict[Path, Path] = {}
     all_files: list[tuple[Path, Path]] = []
@@ -130,6 +141,7 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
     hash_map: defaultdict[str, list[Path]] = defaultdict(list)
     if threads is None or threads < 1:
         threads = os.cpu_count() or 1
+    logger.debug("Using %d worker threads", threads)
 
     def hash_with_cache(item: tuple[Path, Path]) -> tuple[Path, str | None]:
         path, root = item
@@ -146,7 +158,10 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             entry = cache.get(rel)
             if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
                 digest = entry.get('xxh64') or entry.get('hash')
+                if digest:
+                    logger.debug("Cache hit for %s", path)
         if not digest:
+            logger.debug("Hashing %s", path)
             _, digest = file_hash(path, strip_metadata, 'xxh64')
             if digest and use_cache:
                 cache_map.setdefault(root, {})[rel] = {
@@ -230,11 +245,15 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
 
 
 def main():
-    p = argparse.ArgumentParser(description="xxhash64 duplicate finder")
+    p = argparse.ArgumentParser(
+        description="xxhash64 duplicate finder",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     p.add_argument('paths', nargs='+', type=Path, help="Directories/files to scan")
     p.add_argument('-d', '--delete', action='store_true', help="Delete duplicates")
     p.add_argument('-n', '--dry-run', action='store_true', help="Dry run")
-    p.add_argument('-t', '--threads', type=int, default=0, help="Worker threads")
+    p.add_argument('-t', '--threads', type=int, default=os.cpu_count() or 1,
+                   help="Worker threads")
     p.add_argument('-l', '--log-level', default='INFO', help="Logging level")
     p.add_argument('-p', '--no-progress', action='store_true', help="Disable progress bar")
     p.add_argument('-s', '--strip-metadata', action='store_true',
