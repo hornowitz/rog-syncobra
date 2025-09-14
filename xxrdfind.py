@@ -8,11 +8,13 @@ Usage:
     ./xxrdfind.py [options] DIR [DIR ...]
 
 Options:
-    --delete        Remove duplicate files, keeping first instance.
-    --dry-run       Show actions without deleting files.
-    --threads N     Number of hashing worker threads (default: CPU count).
-    --log-level L   Logging level (DEBUG, INFO, WARNING; default INFO).
-    --no-progress   Disable progress bar.
+    -d, --delete          Remove duplicate files, keeping first instance.
+    -n, --dry-run         Show actions without deleting files.
+    -t, --threads N       Number of hashing worker threads (default: CPU count).
+    -l, --log-level L     Logging level (DEBUG, INFO, WARNING; default INFO).
+    -p, --no-progress     Disable progress bar.
+    -s, --strip-metadata  Hash file content with metadata removed.
+    -r, --recursive       Recurse into subdirectories (use --no-recursive to disable).
 """
 
 from __future__ import annotations
@@ -84,18 +86,20 @@ def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64'
         return path, None
 
 
-def iter_files(paths):
+def iter_files(paths, recursive: bool = True):
     for p in paths:
         if p.is_file():
             yield p, p.parent
         elif p.is_dir():
-            for sub in p.rglob('*'):
+            iterator = p.rglob('*') if recursive else p.iterdir()
+            for sub in iterator:
                 if sub.is_file():
                     yield sub, p
 
 
-def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True, strip_metadata=False):
-    all_files = list(iter_files(paths))
+def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True,
+                    strip_metadata=False, recursive: bool = True):
+    all_files = list(iter_files(paths, recursive))
     cache_map: dict[Path, dict] = {}
     root_map: dict[Path, Path] = {}
     for f, root in all_files:
@@ -206,13 +210,15 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
 def main():
     p = argparse.ArgumentParser(description="xxhash64 duplicate finder")
     p.add_argument('paths', nargs='+', type=Path, help="Directories/files to scan")
-    p.add_argument('--delete', action='store_true', help="Delete duplicates")
-    p.add_argument('--dry-run', action='store_true', help="Dry run")
-    p.add_argument('--threads', type=int, default=0, help="Worker threads")
-    p.add_argument('--log-level', default='INFO', help="Logging level")
-    p.add_argument('--no-progress', action='store_true', help="Disable progress bar")
-    p.add_argument('--strip-metadata', action='store_true',
+    p.add_argument('-d', '--delete', action='store_true', help="Delete duplicates")
+    p.add_argument('-n', '--dry-run', action='store_true', help="Dry run")
+    p.add_argument('-t', '--threads', type=int, default=0, help="Worker threads")
+    p.add_argument('-l', '--log-level', default='INFO', help="Logging level")
+    p.add_argument('-p', '--no-progress', action='store_true', help="Disable progress bar")
+    p.add_argument('-s', '--strip-metadata', action='store_true',
                    help="Hash file content with metadata removed")
+    p.add_argument('-r', '--recursive', action=argparse.BooleanOptionalAction, default=True,
+                   help="Recurse into subdirectories (use --no-recursive to disable)")
     args = p.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
@@ -221,7 +227,7 @@ def main():
     try:
         find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
                         threads=args.threads, show_progress=not args.no_progress,
-                        strip_metadata=args.strip_metadata)
+                        strip_metadata=args.strip_metadata, recursive=args.recursive)
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
 
