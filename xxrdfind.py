@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-xxrdfind.py - xxhash64-based duplicate finder with persistent hashing cache,
-logging, dry-run, multithreading and progress display. Designed as a
+xxrdfind.py - xxhash64-based duplicate finder with optional persistent hashing
+cache, logging, dry-run, multithreading and progress display. Designed as a
 lightweight replacement for rdfind for use within rog-syncobra.
 
 Usage:
@@ -15,6 +15,7 @@ Options:
     -p, --no-progress     Disable progress bar.
     -s, --strip-metadata  Hash file content with metadata removed.
     -r, --recursive       Recurse into subdirectories (use --no-recursive to disable).
+    -c, --cache           Use persistent hash cache (use --no-cache to disable).
 """
 
 from __future__ import annotations
@@ -98,14 +99,33 @@ def iter_files(paths, recursive: bool = True):
 
 
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True,
-                    strip_metadata=False, recursive: bool = True):
-    all_files = list(iter_files(paths, recursive))
+                    strip_metadata=False, recursive: bool = True, use_cache: bool = True):
+    raw_files = list(iter_files(paths, recursive))
     cache_map: dict[Path, dict] = {}
     root_map: dict[Path, Path] = {}
-    for f, root in all_files:
-        root_map[f] = root
-        if root not in cache_map:
-            cache_map[root] = load_cache(root, strip_metadata)
+    all_files: list[tuple[Path, Path]] = []
+    cache_root_cache: dict[Path, Path] = {}
+
+    def cache_root_for(path: Path, base: Path) -> Path:
+        dir_path = path.parent
+        if dir_path in cache_root_cache:
+            return cache_root_cache[dir_path]
+        current = dir_path
+        while True:
+            if _cache_file(current, strip_metadata).exists():
+                cache_root_cache[dir_path] = current
+                return current
+            if current == base:
+                cache_root_cache[dir_path] = base
+                return base
+            current = current.parent
+
+    for f, root in raw_files:
+        root_cache = cache_root_for(f, root) if use_cache else root
+        root_map[f] = root_cache
+        if use_cache and root_cache not in cache_map:
+            cache_map[root_cache] = load_cache(root_cache, strip_metadata)
+        all_files.append((f, root_cache))
 
     hash_map: defaultdict[str, list[Path]] = defaultdict(list)
     if threads is None or threads < 1:
@@ -120,22 +140,23 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             return path, None
         rel = str(path.relative_to(root))
         digest: str | None = None
-        cache = cache_map.get(root, {})
-        entry = cache.get(rel)
-        if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
-            digest = entry.get('xxh64') or entry.get('hash')
+        entry = None
+        if use_cache:
+            cache = cache_map.get(root, {})
+            entry = cache.get(rel)
+            if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                digest = entry.get('xxh64') or entry.get('hash')
         if not digest:
             _, digest = file_hash(path, strip_metadata, 'xxh64')
-            if digest:
+            if digest and use_cache:
                 cache_map.setdefault(root, {})[rel] = {
                     'size': stat.st_size,
                     'mtime': stat.st_mtime,
                     'xxh64': digest,
                     **({'blake2b': entry['blake2b']} if entry and 'blake2b' in entry else {}),
                 }
-        else:
-            if entry and 'xxh64' not in entry:
-                entry['xxh64'] = digest
+        elif use_cache and entry and 'xxh64' not in entry:
+            entry['xxh64'] = digest
         return path, digest
 
     progress = tqdm(total=len(all_files), unit="file", disable=not show_progress)
@@ -166,14 +187,14 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                     logger.warning("Skipping %s: %s", f, e)
                     continue
                 rel = str(f.relative_to(root))
-                cache = cache_map.get(root, {})
-                entry = cache.get(rel)
+                cache = cache_map.get(root, {}) if use_cache else {}
+                entry = cache.get(rel) if use_cache else None
                 strong_digest: str | None = None
-                if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                if use_cache and entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
                     strong_digest = entry.get('blake2b')
                 if not strong_digest:
                     _, strong_digest = file_hash(f, strip_metadata, 'blake2b')
-                    if strong_digest:
+                    if strong_digest and use_cache:
                         cache.setdefault(rel, {
                             'size': stat.st_size,
                             'mtime': stat.st_mtime,
@@ -203,8 +224,9 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
     except KeyboardInterrupt:
         logger.warning("Interrupted during duplicate verification; saving cache")
     finally:
-        for root, cache in cache_map.items():
-            save_cache(root, cache, strip_metadata)
+        if use_cache:
+            for root, cache in cache_map.items():
+                save_cache(root, cache, strip_metadata)
 
 
 def main():
@@ -217,6 +239,8 @@ def main():
     p.add_argument('-p', '--no-progress', action='store_true', help="Disable progress bar")
     p.add_argument('-s', '--strip-metadata', action='store_true',
                    help="Hash file content with metadata removed")
+    p.add_argument('-c', '--cache', action=argparse.BooleanOptionalAction, default=True,
+                   help="Use persistent hash cache (use --no-cache to disable)")
     p.add_argument('-r', '--recursive', action=argparse.BooleanOptionalAction, default=True,
                    help="Recurse into subdirectories (use --no-recursive to disable)")
     args = p.parse_args()
@@ -227,7 +251,8 @@ def main():
     try:
         find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
                         threads=args.threads, show_progress=not args.no_progress,
-                        strip_metadata=args.strip_metadata, recursive=args.recursive)
+                        strip_metadata=args.strip_metadata, recursive=args.recursive,
+                        use_cache=args.cache)
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
 
