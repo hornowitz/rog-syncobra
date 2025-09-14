@@ -268,7 +268,7 @@ def exif_sort(src, dest, args):
             '-if','$Keywords=~/whatsapp/i',
             '-FileName<${CreateDate} ${Keywords}%-c.%e',
             '-d', "%Y-%m-%d %H-%M-%S",
-            '-ext+','JPG','-ext+','MP4','-ext+','3GP','.'
+            '-ext','JPG','-ext','MP4','-ext','3GP','.'
         ]
         run(cmd)
         cmd = [
@@ -283,12 +283,12 @@ def exif_sort(src, dest, args):
     logger.info("AndroidModel A059P timestamp fix")
     cmd = [
         'exiftool', vflag, *recur,
-        '-if', "$AndroidModel eq 'A059P'",
+        '-if', '$AndroidModel eq "A059P"',
         '-d', '%Y:%m:%d %H:%M:%S',
         '-alldates<${FileModifyDate#}',
         '-overwrite_original_in_place','-P','-fast2',
-        '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
-        '-ext+','VOB','-ext+','3GP','-ext+','AVI','.'
+        '-ext','MP4','-ext','MOV','-ext','MTS','-ext','MPG',
+        '-ext','VOB','-ext','3GP','-ext','AVI','.'
     ]
     run(cmd)
 
@@ -305,7 +305,7 @@ def exif_sort(src, dest, args):
         '-Filename<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
         '-Filename<${CreationDate}_$SubSecTimeOriginal ${model;}%-c.%e',
         '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-        '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
+        '-ext','MPG','-ext','MTS','-ext','VOB','-ext','3GP','-ext','AVI',
         '-ee','.'
     ]
     run(cmd)
