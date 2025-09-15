@@ -130,6 +130,11 @@ def safe_run(cmd, dry_run=False):
 def check_disk_space(src, dest, dry_run=False):
     src_abs = os.path.realpath(src)
     wd_abs  = os.path.realpath(dest or src)
+
+    if src_abs == wd_abs:
+        logger.info("Source and destination identical; skipping disk space check")
+        return
+
     logger.info(f"Checking disk space under {src_abs}")
     if wd_abs.startswith(src_abs):
         excl = f"--exclude={wd_abs}/*"
@@ -324,7 +329,7 @@ def exif_sort(src, dest, args):
     logger.info("AndroidModel A059P timestamp fix")
     cmd = [
         'exiftool', vflag, *recur,
-        '-if', "$AndroidModel eq 'A059P'",
+        '-if', "$AndroidModel eq 'A059P' and defined $MIMEType and $MIMEType =~ m{^video/}i",
         '-d', '%Y:%m:%d %H:%M:%S',
         '-alldates<filemodifydate',
         '-overwrite_original_in_place','-P','-fast2',
@@ -441,10 +446,12 @@ def archive_old(src, archive_dir, years, dry_run=False):
 def pipeline(args):
     src = args.inputdir
     dest = (args.move2targetdir or src).rstrip('/')
+    src_abs = os.path.abspath(src)
+    dest_abs = os.path.abspath(dest)
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
-    if args.deldupidest:
+    if args.deldupidest and dest_abs != src_abs:
         metadata_dedupe(dest, args.dry_run)
     if args.deldupi:
         metadata_dedupe(src, args.dry_run)
