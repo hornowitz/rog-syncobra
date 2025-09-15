@@ -326,7 +326,7 @@ def exif_sort(src, dest, args):
         'exiftool', vflag, *recur,
         '-if', "$AndroidModel eq 'A059P'",
         '-d', '%Y:%m:%d %H:%M:%S',
-        '"-alldates<filemodifydate"',
+        '-alldates<filemodifydate',
         '-overwrite_original_in_place','-P','-fast2',
         '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
         '-ext+','VOB','-ext+','3GP','-ext+','AVI','.'
