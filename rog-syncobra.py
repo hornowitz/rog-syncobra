@@ -8,6 +8,83 @@ import argparse
 import time
 from datetime import datetime
 
+HEIC_EXTS = {'.heic', '.heif'}
+SCREENSHOT_EXTS = {'.png', '.jpg', '.jpeg', '.heic', '.heif', '.webp'}
+WHATSAPP_IMAGE_EXTS = {'.jpg', '.jpeg'}
+WHATSAPP_VIDEO_EXTS = {'.mp4', '.mov', '.3gp'}
+ANDROID_VIDEO_EXTS = {'.mp4', '.mov', '.mts', '.mpg', '.vob', '.3gp', '.avi'}
+DCIM_EXTS = {
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp',
+    '.heic', '.heif', '.tif', '.tiff', '.dng', '.nef', '.arw', '.orf', '.raf',
+    '.rw2', '.srw', '.cr2', '.cr3', '.pef', '.raw',
+    '.mp4', '.mov', '.m4v', '.mts', '.m2ts', '.mpg', '.mpeg', '.vob', '.3gp',
+    '.avi', '.mkv', '.wmv', '.hevc', '.webm',
+}
+MEDIA_SCAN_EXTS = (
+    HEIC_EXTS
+    | SCREENSHOT_EXTS
+    | WHATSAPP_IMAGE_EXTS
+    | WHATSAPP_VIDEO_EXTS
+    | ANDROID_VIDEO_EXTS
+    | DCIM_EXTS
+)
+
+
+def normalize_extensions(exts):
+    if not exts:
+        return set()
+    normalized = set()
+    for ext in exts:
+        if not ext:
+            continue
+        ext = ext.lower()
+        if not ext.startswith('.'):
+            ext = f'.{ext}'
+        normalized.add(ext)
+    return normalized
+
+
+def describe_extensions(exts):
+    if not exts:
+        return ''
+    return ", ".join(sorted(e.lstrip('.').upper() for e in exts))
+
+
+def scan_media_extensions(root, recursive=False, extensions=None):
+    targets = normalize_extensions(extensions)
+    found = set()
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as iterator:
+                for entry in iterator:
+                    try:
+                        if entry.is_file():
+                            _, ext = os.path.splitext(entry.name)
+                            if not ext:
+                                continue
+                            ext = ext.lower()
+                            if targets and ext not in targets:
+                                continue
+                            found.add(ext)
+                        elif recursive and entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                    except FileNotFoundError:
+                        continue
+        except PermissionError as exc:
+            logger.debug(f"Permission denied while scanning {current}: {exc}")
+        except FileNotFoundError:
+            logger.debug(f"Path disappeared while scanning: {current}")
+    return found
+
+
+def has_matching_media(found_exts, candidates):
+    if not candidates:
+        return bool(found_exts)
+    normalized = normalize_extensions(candidates)
+    return bool(found_exts & normalized)
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
 LOGFILE = '/var/log/rog-syncobra/rog-syncobra.log'
@@ -201,10 +278,46 @@ def raw_dedupe(src, dest, dry_run=False, *_, **__):
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
-    os.chdir(src)
+    src_abs = os.path.abspath(src)
+    os.chdir(src_abs)
     vflag = '-v' if args.debug else '-q'
     recur = ['-r'] if args.recursive else []
     ym = '%Y/%m' if args.year_month_sort else '.'
+
+    present_exts = scan_media_extensions(src_abs, args.recursive, MEDIA_SCAN_EXTS)
+    if logger.isEnabledFor(logging.DEBUG):
+        detected = describe_extensions(present_exts) or 'none'
+        logger.debug(f"Detected media extensions: {detected}")
+
+    heic_present = has_matching_media(present_exts, HEIC_EXTS)
+    screenshot_present = has_matching_media(present_exts, SCREENSHOT_EXTS)
+    whatsapp_image_present = has_matching_media(present_exts, WHATSAPP_IMAGE_EXTS)
+    whatsapp_video_present = has_matching_media(present_exts, WHATSAPP_VIDEO_EXTS)
+    android_video_present = has_matching_media(present_exts, ANDROID_VIDEO_EXTS)
+    dcim_present = has_matching_media(present_exts, DCIM_EXTS)
+
+    should_run = any(
+        (
+            heic_present,
+            screenshot_present,
+            android_video_present,
+            dcim_present,
+            args.whatsapp and (whatsapp_image_present or whatsapp_video_present),
+        )
+    )
+
+    if not should_run:
+        if present_exts:
+            logger.info(
+                "Skipping exiftool processing in %s (no matching HEIC/screenshot/DCIM media)",
+                src_abs,
+            )
+        else:
+            logger.info(
+                "Skipping exiftool processing in %s (no media files detected)", src_abs
+            )
+        os.chdir(cwd)
+        return
 
     # Persistent exiftool process to reuse directory traversal and metadata
     # reads.  Commands are fed via stdin and executed with the "-stay_open"
@@ -244,123 +357,148 @@ def exif_sort(src, dest, args):
             elif line:
                 logger.info(line)
 
-    # 1) HEIC
-    logger.info("HEIC processing")
-    cmd = [
-        'exiftool', vflag, *recur,
-        '-FileName<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
-        '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-        '-ext', 'HEIC', '.'
-    ]
-    run(cmd)
-
-    # 2) Screenshots tagging & date-fix
-    logger.info("Screenshots tagging")
-    base_if = (
-        r"$filename=~/screenshot/i or "
-        r"$UserComment=~/screenshot/i"
-    )
-    for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
-                             ("DateCreated",   "DateCreated")):
+    heic_desc = describe_extensions(HEIC_EXTS)
+    if heic_present:
+        logger.info("HEIC processing")
         cmd = [
             'exiftool', vflag, *recur,
-            '-if', base_if,
-            '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
-            '-Keywords+=Screenshot',
-            f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
-            '-overwrite_original_in_place','-P','-fast2','.'
+            '-FileName<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
+            '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
+            '-ext', 'HEIC', '.'
         ]
         run(cmd)
+    else:
+        logger.info("Skipping HEIC processing (no %s media detected)", heic_desc or 'HEIC')
 
-    # 3) Rename & move screenshots
-    logger.info("Screenshots rename & move")
-    cmd = [
-        'exiftool', vflag, *recur,
-        '-if', '$Keywords=~/screenshot/i',
-        '-Filename<${CreateDate} ${Keywords}%-c.%e',
-        '-d', "%Y-%m-%d %H-%M-%S", '.'
-    ]
-    run(cmd)
-    cmd = [
-        'exiftool', vflag, *recur,
-        '-if', '$Keywords=~/screenshot/i',
-        '-Directory<$CreateDate/Screenshots',
-        '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e', '.'
-    ]
-    run(cmd)
-
-    # 4) WhatsApp
-    if args.whatsapp:
-        logger.info("WhatsApp processing")
-        blocks = [
-            (r"$filename=~/^IMG-.../ and ...", ['-ext','JPG']),
-            (r"$jfifversion=~/1\.01/i and ...", ['-ext','JPG']),
-            (r"$filename=~/^VID-.../", ['-ext','MP4','-ext','MOV']),
-            (r"$filename=~/^VID-.../", ['-ext','3GP']),
-        ]
-        for cond, exts in blocks:
+    screenshot_desc = describe_extensions(SCREENSHOT_EXTS)
+    if screenshot_present:
+        logger.info("Screenshots tagging")
+        base_if = (
+            r"$filename=~/screenshot/i or "
+            r"$UserComment=~/screenshot/i"
+        )
+        for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
+                                 ("DateCreated",   "DateCreated")):
             cmd = [
                 'exiftool', vflag, *recur,
-                '-if', cond,
-                '-if', 'not defined $Keywords or $Keywords!~/WhatsApp/i',
-                '-Keywords+=WhatsApp',
-                '-alldates<20${filename}','-FileModifyDate<20${filename}',
-                '-overwrite_original_in_place','-P','-fast2', *exts, '.'
+                '-if', base_if,
+                '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
+                '-Keywords+=Screenshot',
+                f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
+                '-overwrite_original_in_place','-P','-fast2','.'
             ]
             run(cmd)
-        # rename & move WhatsApp
+
+        logger.info("Screenshots rename & move")
         cmd = [
             'exiftool', vflag, *recur,
-            '-if','$Keywords=~/whatsapp/i',
-            '-FileName<${CreateDate} ${Keywords}%-c.%e',
-            '-d', "%Y-%m-%d %H-%M-%S",
-            '-ext+','JPG','-ext+','MP4','-ext+','3GP','.'
+            '-if', '$Keywords=~/screenshot/i',
+            '-Filename<${CreateDate} ${Keywords}%-c.%e',
+            '-d', "%Y-%m-%d %H-%M-%S", '.'
         ]
         run(cmd)
         cmd = [
             'exiftool', vflag, *recur,
-            '-if','$Keywords=~/whatsapp/i',
-            '-Directory<$CreateDate/WhatsApp',
-            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
+            '-if', '$Keywords=~/screenshot/i',
+            '-Directory<$CreateDate/Screenshots',
+            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e', '.'
         ]
         run(cmd)
+    else:
+        logger.info("Skipping screenshot flow (no %s media detected)", screenshot_desc)
 
-    # 5) AndroidModel-specific timestamp fixes
-    logger.info("AndroidModel A059P timestamp fix")
-    cmd = [
-        'exiftool', vflag, *recur,
-        '-if', "$AndroidModel eq 'A059P' and defined $MIMEType and $MIMEType =~ m{^video/}i",
-        '-d', '%Y:%m:%d %H:%M:%S',
-        '-alldates<filemodifydate',
-        '-overwrite_original_in_place','-P','-fast2',
-        '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
-        '-ext+','VOB','-ext+','3GP','-ext+','AVI','.'
-    ]
-    run(cmd)
+    if args.whatsapp:
+        whatsapp_desc = describe_extensions(WHATSAPP_IMAGE_EXTS | WHATSAPP_VIDEO_EXTS)
+        if not (whatsapp_image_present or whatsapp_video_present):
+            logger.info(
+                "Skipping WhatsApp processing (no %s media detected)", whatsapp_desc
+            )
+        else:
+            logger.info("WhatsApp processing")
+            blocks = [
+                (r"$filename=~/^IMG-.../ and ...", ['-ext', 'JPG'], WHATSAPP_IMAGE_EXTS),
+                (r"$jfifversion=~/1\.01/i and ...", ['-ext', 'JPG'], WHATSAPP_IMAGE_EXTS),
+                (r"$filename=~/^VID-.../", ['-ext', 'MP4', '-ext', 'MOV'], WHATSAPP_VIDEO_EXTS),
+                (r"$filename=~/^VID-.../", ['-ext', '3GP'], {'.3gp'}),
+            ]
+            for cond, exts, required in blocks:
+                if required and not has_matching_media(present_exts, required):
+                    logger.debug(
+                        "Skipping WhatsApp rule %s (no %s media)",
+                        cond,
+                        describe_extensions(required),
+                    )
+                    continue
+                cmd = [
+                    'exiftool', vflag, *recur,
+                    '-if', cond,
+                    '-if', 'not defined $Keywords or $Keywords!~/WhatsApp/i',
+                    '-Keywords+=WhatsApp',
+                    '-alldates<20${filename}','-FileModifyDate<20${filename}',
+                    '-overwrite_original_in_place','-P','-fast2', *exts, '.'
+                ]
+                run(cmd)
 
-    # 6) Main DCIM & misc
-    logger.info("DCIM & misc processing")
-    cmd = [
-        'exiftool', vflag, *recur,
-        '-if','not defined $Keywords',
-        '-Filename<${ModifyDate}%-c.%e',
-        '-Filename<${DateTimeOriginal}%-c.%e',
-        '-Filename<${CreateDate}%-c.%e',
-        '-Filename<${CreateDate} ${model;}%-c.%e',
-        '-Filename<${CreationDate} ${model;}%-c.%e',
-        '-Filename<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
-        '-Filename<${CreationDate}_$SubSecTimeOriginal ${model;}%-c.%e',
-        '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-        '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
-        '-ee','.'
-    ]
-    run(cmd)
-    cmd = [
-        'exiftool', vflag, *recur,
-        '-if','not defined $Keywords and not defined $model;',
-        '-Directory<$FileModifyDate/diverses',
-        '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e','.']
-    run(cmd)
+            cmd = [
+                'exiftool', vflag, *recur,
+                '-if','$Keywords=~/whatsapp/i',
+                '-FileName<${CreateDate} ${Keywords}%-c.%e',
+                '-d', "%Y-%m-%d %H-%M-%S",
+                '-ext+','JPG','-ext+','MP4','-ext+','3GP','.'
+            ]
+            run(cmd)
+            cmd = [
+                'exiftool', vflag, *recur,
+                '-if','$Keywords=~/whatsapp/i',
+                '-Directory<$CreateDate/WhatsApp',
+                '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
+            ]
+            run(cmd)
+
+    android_desc = describe_extensions(ANDROID_VIDEO_EXTS)
+    if android_video_present:
+        logger.info("AndroidModel A059P timestamp fix")
+        cmd = [
+            'exiftool', vflag, *recur,
+            '-if', "$AndroidModel eq 'A059P' and defined $MIMEType and $MIMEType =~ m{^video/}i",
+            '-d', '%Y:%m:%d %H:%M:%S',
+            '-alldates<filemodifydate',
+            '-overwrite_original_in_place','-P','-fast2',
+            '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
+            '-ext+','VOB','-ext+','3GP','-ext+','AVI','.'
+        ]
+        run(cmd)
+    else:
+        logger.info(
+            "Skipping AndroidModel A059P timestamp fix (no %s media detected)", android_desc
+        )
+
+    if dcim_present:
+        logger.info("DCIM & misc processing")
+        cmd = [
+            'exiftool', vflag, *recur,
+            '-if','not defined $Keywords',
+            '-Filename<${ModifyDate}%-c.%e',
+            '-Filename<${DateTimeOriginal}%-c.%e',
+            '-Filename<${CreateDate}%-c.%e',
+            '-Filename<${CreateDate} ${model;}%-c.%e',
+            '-Filename<${CreationDate} ${model;}%-c.%e',
+            '-Filename<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
+            '-Filename<${CreationDate}_$SubSecTimeOriginal ${model;}%-c.%e',
+            '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
+            '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
+            '-ee','.'
+        ]
+        run(cmd)
+        cmd = [
+            'exiftool', vflag, *recur,
+            '-if','not defined $Keywords and not defined $model;',
+            '-Directory<$FileModifyDate/diverses',
+            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e','.'
+        ]
+        run(cmd)
+    else:
+        logger.info("Skipping DCIM & misc processing (no supported media detected)")
 
     os.chdir(cwd)
     if proc:
