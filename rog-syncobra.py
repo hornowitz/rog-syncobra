@@ -171,11 +171,16 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False):
     if dry_run:
         cmd.append('--dry-run')
     logger.info(f"xxrdfind dedupe: {' '.join(cmd)}")
+    if dry_run:
+        logger.info("Dry run: skipping xxrdfind execution")
+        return
     safe_run(cmd, False)
 
 
 def metadata_dedupe(path, dry_run=False):
-    xxrdfind_dedupe([path], dry_run, strip_metadata=False)
+    prefix = "[DRY] " if dry_run else ""
+    logger.info(f"{prefix}Metadata dedupe via xxrdfind: {path}")
+    xxrdfind_dedupe([path], dry_run=dry_run, strip_metadata=False)
 
 
 def raw_dedupe(src, dest, dry_run=False, *_, **__):
@@ -185,8 +190,9 @@ def raw_dedupe(src, dest, dry_run=False, *_, **__):
     if dest_abs and dest_abs != src_abs:
         paths.append(dest_abs)
     paths.append(src_abs)
-    logger.info(f"Raw dedupe via xxrdfind: {' '.join(paths)}")
-    xxrdfind_dedupe(paths, dry_run, strip_metadata=True)
+    prefix = "[DRY] " if dry_run else ""
+    logger.info(f"{prefix}Raw dedupe via xxrdfind: {' '.join(paths)}")
+    xxrdfind_dedupe(paths, dry_run=dry_run, strip_metadata=True)
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
