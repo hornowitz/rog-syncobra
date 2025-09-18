@@ -490,24 +490,6 @@ def exif_sort(src, dest, args):
             ]
             queue(cmd)
 
-    android_desc = describe_extensions(ANDROID_VIDEO_EXTS)
-    if android_video_present:
-        logger.info("AndroidModel A059P timestamp fix")
-        cmd = [
-            'exiftool', vflag,
-            '-if', "$AndroidModel eq 'A059P' and defined $MIMEType and $MIMEType =~ m{^video/}i",
-            '-d', '%Y:%m:%d %H:%M:%S',
-            '-alldates<filemodifydate',
-            '-overwrite_original_in_place','-P','-fast2',
-            '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
-            '-ext+','VOB','-ext+','3GP','-ext+','AVI'
-        ]
-        queue(cmd)
-    else:
-        logger.info(
-            "Skipping AndroidModel A059P timestamp fix (no %s media detected)", android_desc
-        )
-
     if dcim_present:
         logger.info("DCIM & misc processing")
         cmd = [
@@ -523,6 +505,23 @@ def exif_sort(src, dest, args):
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
             '-ee'
+        ]
+        queue(cmd)
+        cmd = [
+            'exiftool', vflag,
+            '-if', 'not defined $Keywords',
+            '-if', 'not defined $model',
+            "-FileName<${FileModifyDate}%-c.%e",
+            '-d', '%Y-%m-%d %H-%M-%S',
+            '-ext', 'mp4',
+            '-ext', '3gp',
+            '-ext', 'mov',
+            '-ext', 'mts',
+            '-ext', 'jpg',
+            '-ext', 'png',
+            '-ext', 'avi',
+            '-ext', 'vob',
+            '-ext', 'jpeg',
         ]
         queue(cmd)
         cmd = [
