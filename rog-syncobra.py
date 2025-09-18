@@ -281,8 +281,21 @@ def exif_sort(src, dest, args):
     src_abs = os.path.abspath(src)
     os.chdir(src_abs)
     vflag = '-v' if args.debug else '-q'
-    recur = ['-r'] if args.recursive else []
     ym = '%Y/%m' if args.year_month_sort else '.'
+
+    if args.recursive:
+        targets = ['.']
+        seen = {'.'}
+        for walk_root, dirs, _ in os.walk('.'):
+            dirs.sort()
+            for name in dirs:
+                rel = os.path.join(walk_root, name)
+                if rel in seen:
+                    continue
+                targets.append(rel)
+                seen.add(rel)
+    else:
+        targets = ['.']
 
     present_exts = scan_media_extensions(src_abs, args.recursive, MEDIA_SCAN_EXTS)
     if logger.isEnabledFor(logging.DEBUG):
@@ -333,13 +346,15 @@ def exif_sort(src, dest, args):
             bufsize=1,
         )
 
-    def run(cmd):
-        logger.info(" ".join(cmd))
+    def run(cmd, extra_targets=None):
+        target_list = extra_targets if extra_targets is not None else targets
+        full_cmd = [*cmd, *target_list]
+        logger.info(" ".join(full_cmd))
         if args.dry_run:
             return
         assert proc and proc.stdin and proc.stdout
         # exiftool expects one argument per line when using -@ -
-        proc.stdin.write("\n".join(cmd[1:]) + "\n-execute\n")
+        proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
         proc.stdin.flush()
 
         # Emit exiftool output so each operation is logged individually
@@ -361,10 +376,10 @@ def exif_sort(src, dest, args):
     if heic_present:
         logger.info("HEIC processing")
         cmd = [
-            'exiftool', vflag, *recur,
+            'exiftool', vflag,
             '-FileName<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-            '-ext', 'HEIC', '.'
+            '-ext', 'HEIC'
         ]
         run(cmd)
     else:
@@ -380,28 +395,28 @@ def exif_sort(src, dest, args):
         for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
                                  ("DateCreated",   "DateCreated")):
             cmd = [
-                'exiftool', vflag, *recur,
+                'exiftool', vflag,
                 '-if', base_if,
                 '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
                 '-Keywords+=Screenshot',
                 f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
-                '-overwrite_original_in_place','-P','-fast2','.'
+                '-overwrite_original_in_place','-P','-fast2'
             ]
             run(cmd)
 
         logger.info("Screenshots rename & move")
         cmd = [
-            'exiftool', vflag, *recur,
+            'exiftool', vflag,
             '-if', '$Keywords=~/screenshot/i',
             '-Filename<${CreateDate} ${Keywords}%-c.%e',
-            '-d', "%Y-%m-%d %H-%M-%S", '.'
+            '-d', "%Y-%m-%d %H-%M-%S"
         ]
         run(cmd)
         cmd = [
-            'exiftool', vflag, *recur,
+            'exiftool', vflag,
             '-if', '$Keywords=~/screenshot/i',
             '-Directory<$CreateDate/Screenshots',
-            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e', '.'
+            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         ]
         run(cmd)
     else:
@@ -430,25 +445,25 @@ def exif_sort(src, dest, args):
                     )
                     continue
                 cmd = [
-                    'exiftool', vflag, *recur,
+                    'exiftool', vflag,
                     '-if', cond,
                     '-if', 'not defined $Keywords or $Keywords!~/WhatsApp/i',
                     '-Keywords+=WhatsApp',
                     '-alldates<20${filename}','-FileModifyDate<20${filename}',
-                    '-overwrite_original_in_place','-P','-fast2', *exts, '.'
+                    '-overwrite_original_in_place','-P','-fast2', *exts
                 ]
                 run(cmd)
 
             cmd = [
-                'exiftool', vflag, *recur,
+                'exiftool', vflag,
                 '-if','$Keywords=~/whatsapp/i',
                 '-FileName<${CreateDate} ${Keywords}%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
-                '-ext+','JPG','-ext+','MP4','-ext+','3GP','.'
+                '-ext+','JPG','-ext+','MP4','-ext+','3GP'
             ]
             run(cmd)
             cmd = [
-                'exiftool', vflag, *recur,
+                'exiftool', vflag,
                 '-if','$Keywords=~/whatsapp/i',
                 '-Directory<$CreateDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
@@ -459,13 +474,13 @@ def exif_sort(src, dest, args):
     if android_video_present:
         logger.info("AndroidModel A059P timestamp fix")
         cmd = [
-            'exiftool', vflag, *recur,
+            'exiftool', vflag,
             '-if', "$AndroidModel eq 'A059P' and defined $MIMEType and $MIMEType =~ m{^video/}i",
             '-d', '%Y:%m:%d %H:%M:%S',
             '-alldates<filemodifydate',
             '-overwrite_original_in_place','-P','-fast2',
             '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
-            '-ext+','VOB','-ext+','3GP','-ext+','AVI','.'
+            '-ext+','VOB','-ext+','3GP','-ext+','AVI'
         ]
         run(cmd)
     else:
@@ -476,7 +491,7 @@ def exif_sort(src, dest, args):
     if dcim_present:
         logger.info("DCIM & misc processing")
         cmd = [
-            'exiftool', vflag, *recur,
+            'exiftool', vflag,
             '-if','not defined $Keywords',
             '-Filename<${ModifyDate}%-c.%e',
             '-Filename<${DateTimeOriginal}%-c.%e',
@@ -487,14 +502,14 @@ def exif_sort(src, dest, args):
             '-Filename<${CreationDate}_$SubSecTimeOriginal ${model;}%-c.%e',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
-            '-ee','.'
+            '-ee'
         ]
         run(cmd)
         cmd = [
-            'exiftool', vflag, *recur,
+            'exiftool', vflag,
             '-if','not defined $Keywords and not defined $model;',
             '-Directory<$FileModifyDate/diverses',
-            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e','.'
+            '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         ]
         run(cmd)
     else:
