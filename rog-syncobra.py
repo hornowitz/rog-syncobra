@@ -6,6 +6,7 @@ import subprocess
 import logging
 import argparse
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 HEIC_EXTS = {'.heic', '.heif'}
@@ -28,6 +29,8 @@ MEDIA_SCAN_EXTS = (
     | ANDROID_VIDEO_EXTS
     | DCIM_EXTS
 )
+
+DEFAULT_EXIFTOOL_WORKERS = max(1, min(4, os.cpu_count() or 1))
 
 
 def normalize_extensions(exts):
@@ -171,6 +174,8 @@ def parse_args():
                    help="Show actions without executing")
     p.add_argument('--debug', action='store_true',
                    help="Verbose exiftool (-v); default is quiet (-q)")
+    p.add_argument('--exiftool-workers', type=int, default=DEFAULT_EXIFTOOL_WORKERS,
+                   help=f"Number of parallel exiftool workers to use (default: {DEFAULT_EXIFTOOL_WORKERS})")
     p.add_argument('-W','--watch', action='store_true',
                    help="Watch mode: monitor for CLOSE_WRITE events")
     p.add_argument('-I','--inputdir', default=os.getcwd(),
@@ -193,6 +198,8 @@ def parse_args():
     extra = [e for e in extra if e != '-']
     if extra:
         p.error(f"unrecognized arguments: {' '.join(extra)}")
+    if args.exiftool_workers < 1:
+        p.error("--exiftool-workers must be >= 1")
     return args
 
 def safe_run(cmd, dry_run=False):
@@ -332,11 +339,22 @@ def exif_sort(src, dest, args):
         os.chdir(cwd)
         return
 
-    # Persistent exiftool process to reuse directory traversal and metadata
-    # reads.  Commands are fed via stdin and executed with the "-stay_open"
-    # interface so we only spawn exiftool once.
-    proc = None
-    if not args.dry_run:
+    jobs = []
+
+    def queue(cmd, extra_targets=None):
+        jobs.append((list(cmd), list(extra_targets) if extra_targets is not None else None))
+
+    def split_targets(target_list, worker_count):
+        if worker_count <= 1 or len(target_list) <= 1:
+            return [list(target_list)]
+        buckets = [[] for _ in range(worker_count)]
+        for idx, target in enumerate(target_list):
+            buckets[idx % worker_count].append(target)
+        return [bucket for bucket in buckets if bucket]
+
+    def run_worker(worker_targets):
+        if not worker_targets:
+            return
         proc = subprocess.Popen(
             ['exiftool', '-stay_open', 'True', '-@', '-'],
             stdin=subprocess.PIPE,
@@ -345,32 +363,34 @@ def exif_sort(src, dest, args):
             text=True,
             bufsize=1,
         )
+        assert proc.stdin and proc.stdout
+        try:
+            for cmd, extra in jobs:
+                current_targets = extra if extra is not None else worker_targets
+                if not current_targets:
+                    continue
+                full_cmd = [*cmd, *current_targets]
+                logger.info(" ".join(full_cmd))
+                proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
+                proc.stdin.flush()
 
-    def run(cmd, extra_targets=None):
-        target_list = extra_targets if extra_targets is not None else targets
-        full_cmd = [*cmd, *target_list]
-        logger.info(" ".join(full_cmd))
-        if args.dry_run:
-            return
-        assert proc and proc.stdin and proc.stdout
-        # exiftool expects one argument per line when using -@ -
-        proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
-        proc.stdin.flush()
-
-        # Emit exiftool output so each operation is logged individually
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            line = line.rstrip()
-            if line == '{ready}':
-                break
-            if line.lower().startswith('error'):
-                logger.error(line)
-            elif 'warning' in line.lower():
-                logger.warning(line)
-            elif line:
-                logger.info(line)
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        raise RuntimeError('exiftool terminated unexpectedly')
+                    line = line.rstrip()
+                    if line == '{ready}':
+                        break
+                    if line.lower().startswith('error'):
+                        logger.error(line)
+                    elif 'warning' in line.lower():
+                        logger.warning(line)
+                    elif line:
+                        logger.info(line)
+        finally:
+            proc.stdin.write("-stay_open\nFalse\n")
+            proc.stdin.flush()
+            proc.communicate()
 
     heic_desc = describe_extensions(HEIC_EXTS)
     if heic_present:
@@ -381,7 +401,7 @@ def exif_sort(src, dest, args):
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext', 'HEIC'
         ]
-        run(cmd)
+        queue(cmd)
     else:
         logger.info("Skipping HEIC processing (no %s media detected)", heic_desc or 'HEIC')
 
@@ -402,7 +422,7 @@ def exif_sort(src, dest, args):
                 f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
                 '-overwrite_original_in_place','-P','-fast2'
             ]
-            run(cmd)
+            queue(cmd)
 
         logger.info("Screenshots rename & move")
         cmd = [
@@ -411,14 +431,14 @@ def exif_sort(src, dest, args):
             '-Filename<${CreateDate} ${Keywords}%-c.%e',
             '-d', "%Y-%m-%d %H-%M-%S"
         ]
-        run(cmd)
+        queue(cmd)
         cmd = [
             'exiftool', vflag,
             '-if', '$Keywords=~/screenshot/i',
             '-Directory<$CreateDate/Screenshots',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         ]
-        run(cmd)
+        queue(cmd)
     else:
         logger.info("Skipping screenshot flow (no %s media detected)", screenshot_desc)
 
@@ -452,7 +472,7 @@ def exif_sort(src, dest, args):
                     '-alldates<20${filename}','-FileModifyDate<20${filename}',
                     '-overwrite_original_in_place','-P','-fast2', *exts
                 ]
-                run(cmd)
+                queue(cmd)
 
             cmd = [
                 'exiftool', vflag,
@@ -461,14 +481,14 @@ def exif_sort(src, dest, args):
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','JPG','-ext+','MP4','-ext+','3GP'
             ]
-            run(cmd)
+            queue(cmd)
             cmd = [
                 'exiftool', vflag,
                 '-if','$Keywords=~/whatsapp/i',
                 '-Directory<$CreateDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
             ]
-            run(cmd)
+            queue(cmd)
 
     android_desc = describe_extensions(ANDROID_VIDEO_EXTS)
     if android_video_present:
@@ -482,7 +502,7 @@ def exif_sort(src, dest, args):
             '-ext+','MP4','-ext+','MOV','-ext+','MTS','-ext+','MPG',
             '-ext+','VOB','-ext+','3GP','-ext+','AVI'
         ]
-        run(cmd)
+        queue(cmd)
     else:
         logger.info(
             "Skipping AndroidModel A059P timestamp fix (no %s media detected)", android_desc
@@ -504,23 +524,42 @@ def exif_sort(src, dest, args):
             '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
             '-ee'
         ]
-        run(cmd)
+        queue(cmd)
         cmd = [
             'exiftool', vflag,
             '-if','not defined $Keywords and not defined $model;',
             '-Directory<$FileModifyDate/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         ]
-        run(cmd)
+        queue(cmd)
     else:
         logger.info("Skipping DCIM & misc processing (no supported media detected)")
 
-    os.chdir(cwd)
-    if proc:
-        # Shut down the persistent exiftool process
-        proc.stdin.write("-stay_open\nFalse\n")
-        proc.stdin.flush()
-        proc.communicate()
+    try:
+        if args.dry_run:
+            for cmd, extra_targets in jobs:
+                target_list = extra_targets if extra_targets is not None else targets
+                if not target_list:
+                    continue
+                full_cmd = [*cmd, *target_list]
+                logger.info("[DRY] " + " ".join(full_cmd))
+            return
+
+        if not jobs:
+            return
+
+        worker_count = min(args.exiftool_workers, max(1, len(targets)))
+        target_chunks = split_targets(targets, worker_count)
+
+        if len(target_chunks) == 1:
+            run_worker(target_chunks[0])
+        else:
+            with ThreadPoolExecutor(len(target_chunks)) as executor:
+                futures = [executor.submit(run_worker, chunk) for chunk in target_chunks]
+                for future in futures:
+                    future.result()
+    finally:
+        os.chdir(cwd)
 
 def archive_old(src, archive_dir, years, dry_run=False):
     """
