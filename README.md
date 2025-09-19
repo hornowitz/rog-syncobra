@@ -47,12 +47,6 @@ To automatically install missing packages run:
 - `-F, --dedup-destination-final` – run metadata dedupe on the destination after the
   pipeline finishes moving files
 - `--install-deps` – install required system packages and exit
-- `--photoprism-index-command CMD` – run `CMD` via `/bin/sh -c` after changes are
-  made so Photoprism can index new or removed files; failed runs are retried on the
-  next invocation. The placeholders `{path}`, `{relative}`, and `{dest}` expand to
-  the absolute directory path, the path relative to the destination root, and the
-  destination root respectively. Appending `_q` (for example `{path_q}`) inserts a
-  shell-quoted version suitable for commands such as `kubectl exec`.
 - `--photoprism-api-base-url URL`, `--photoprism-api-username USER`,
   `--photoprism-api-password PASS` – trigger indexing through the Photoprism REST
   API instead of executing a local command. Optional flags `--photoprism-api-rescan`
@@ -87,6 +81,33 @@ Use the REST API instead of a shell command:
   --photoprism-api-username admin \
   --photoprism-api-password supersecret
 ```
+
+### Photoprism REST watcher
+
+For setups where Photoprism should be reindexed whenever new files appear, a
+dedicated helper script `photoprism-watcher.py` is provided. It watches one or
+more directories and triggers the REST API once changes have settled for a
+configurable grace period:
+
+```bash
+./photoprism-watcher.py \
+  --watch /path/to/library/originals \
+  --library-root /path/to/library \
+  --photoprism-api-base-url https://photos.example.com \
+  --photoprism-api-username admin \
+  --photoprism-api-password supersecret
+```
+
+Additional flags mirror the Photoprism options available in `rog-syncobra.py`:
+
+- `--initial-index` runs an indexing pass for all watched directories before
+  entering watch mode.
+- `--grace SECONDS` waits for a quiet period before invoking the API (default:
+  300 seconds).
+- `--photoprism-api-strip-prefix PREFIX` removes mount-point prefixes from
+  paths submitted to the API (may be supplied multiple times).
+
+The watcher writes detailed logs to `/var/log/rog-syncobra/photoprism-watcher.log`.
 
 ## Systemd service
 An example systemd **template** unit is provided in `rog-syncobra@.service`. It
