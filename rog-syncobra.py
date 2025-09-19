@@ -451,10 +451,30 @@ def exif_sort(src, dest, args):
         else:
             logger.info("WhatsApp processing")
             blocks = [
-                (r"$filename=~/^IMG-.../ and ...", ['-ext', 'JPG'], WHATSAPP_IMAGE_EXTS),
-                (r"$jfifversion=~/1\.01/i and ...", ['-ext', 'JPG'], WHATSAPP_IMAGE_EXTS),
-                (r"$filename=~/^VID-.../", ['-ext', 'MP4', '-ext', 'MOV'], WHATSAPP_VIDEO_EXTS),
-                (r"$filename=~/^VID-.../", ['-ext', '3GP'], {'.3gp'}),
+                # WhatsApp Images (JPG)
+                (
+                    r"$filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
+                    ['-ext', 'JPG'],
+                    WHATSAPP_IMAGE_EXTS,
+                ),
+                # WhatsApp Videos (MP4 + MOV)
+                (
+                    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
+                    ['-ext', 'MP4', '-ext', 'MOV'],
+                    WHATSAPP_VIDEO_EXTS,
+                ),
+                # WhatsApp Videos (3GP – Variante 1)
+                (
+                    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
+                    ['-ext', '3GP'],
+                    {'.3gp'},
+                ),
+                # WhatsApp Videos (3GP – Variante 2, ohne EncodingProcess-Check)
+                (
+                    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i",
+                    ['-ext', '3GP'],
+                    {'.3gp'},
+                ),
             ]
             for cond, exts, required in blocks:
                 if required and not has_matching_media(present_exts, required):
