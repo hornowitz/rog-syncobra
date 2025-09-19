@@ -58,7 +58,9 @@ To automatically install missing packages run:
   API instead of executing a local command. Optional flags `--photoprism-api-rescan`
   and `--photoprism-api-cleanup` request a full rescan or cleanup cycle,
   respectively. Use `--photoprism-api-insecure` to skip TLS verification when
-  working with self-signed certificates.
+  working with self-signed certificates. Use `--photoprism-api-call [PATH]` to
+  trigger the API manually (defaulting to `/`) and exit without performing any
+  file processing.
 
 ### Photoprism index examples
 
