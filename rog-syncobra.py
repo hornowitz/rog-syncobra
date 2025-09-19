@@ -53,12 +53,18 @@ def describe_extensions(exts):
     return ", ".join(sorted(e.lstrip('.').upper() for e in exts))
 
 
-def scan_media_extensions(root, recursive=False, extensions=None):
+def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=None):
     targets = normalize_extensions(extensions)
     found = set()
     stack = [root]
     while stack:
         current = stack.pop()
+        current_abs = os.path.abspath(current)
+        if skip_paths and any(
+            current_abs == skip or current_abs.startswith(f"{skip}{os.sep}")
+            for skip in skip_paths
+        ):
+            continue
         try:
             with os.scandir(current) as iterator:
                 for entry in iterator:
@@ -72,6 +78,12 @@ def scan_media_extensions(root, recursive=False, extensions=None):
                                 continue
                             found.add(ext)
                         elif recursive and entry.is_dir(follow_symlinks=False):
+                            entry_abs = os.path.abspath(entry.path)
+                            if skip_paths and any(
+                                entry_abs == skip or entry_abs.startswith(f"{skip}{os.sep}")
+                                for skip in skip_paths
+                            ):
+                                continue
                             stack.append(entry.path)
                     except FileNotFoundError:
                         continue
@@ -186,6 +198,8 @@ def parse_args():
                    help="Directory to archive old files to (e.g. /rogaliki/obrazy/0archiv)")
     p.add_argument('--archive-years', type=int, default=2,
                    help="Move directories older than this many years (default 2)")
+    p.add_argument('--skip-marker', default='.rog-syncobraignore',
+                   help="Filename that marks directories to skip (set to '' to disable)")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
 
@@ -289,22 +303,58 @@ def exif_sort(src, dest, args):
     os.chdir(src_abs)
     vflag = '-v' if args.debug else '-q'
     ym = '%Y/%m' if args.year_month_sort else '.'
+    skip_marker = args.skip_marker
+    skip_rel = set()
+    skip_abs = set()
+
+    def mark_skip(rel_path):
+        if rel_path in skip_rel:
+            return
+        skip_rel.add(rel_path)
+        abs_path = os.path.abspath(os.path.join(src_abs, rel_path))
+        skip_abs.add(abs_path)
+
+    if skip_marker:
+        if os.path.exists(skip_marker):
+            mark_skip('.')
 
     if args.recursive:
         targets = ['.']
         seen = {'.'}
-        for walk_root, dirs, _ in os.walk('.'):
+        for walk_root, dirs, _ in os.walk('.', topdown=True):
+            if skip_marker and walk_root in skip_rel:
+                dirs[:] = []
+                continue
+            if skip_marker:
+                marker_here = os.path.join(walk_root, skip_marker)
+                if os.path.exists(marker_here):
+                    mark_skip(walk_root or '.')
+                    dirs[:] = []
+                    continue
             dirs.sort()
+            pruned = []
             for name in dirs:
                 rel = os.path.join(walk_root, name)
+                if skip_marker:
+                    marker_path = os.path.join(rel, skip_marker)
+                    if os.path.exists(marker_path):
+                        mark_skip(rel)
+                        continue
                 if rel in seen:
                     continue
                 targets.append(rel)
                 seen.add(rel)
+                pruned.append(name)
+            dirs[:] = pruned
     else:
         targets = ['.']
 
-    present_exts = scan_media_extensions(src_abs, args.recursive, MEDIA_SCAN_EXTS)
+    if skip_rel:
+        targets = [t for t in targets if t not in skip_rel]
+
+    present_exts = scan_media_extensions(
+        src_abs, args.recursive, MEDIA_SCAN_EXTS, skip_paths=skip_abs
+    )
     if logger.isEnabledFor(logging.DEBUG):
         detected = describe_extensions(present_exts) or 'none'
         logger.debug(f"Detected media extensions: {detected}")
