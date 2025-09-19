@@ -174,11 +174,7 @@ class OperationTracker:
             if str(candidate):
                 targets.add(candidate)
 
-        for src, dest in self.moved:
-            src_parent = Path(src).parent
-            if str(src_parent):
-                targets.add(src_parent)
-
+        for _src, dest in self.moved:
             dest_path = Path(dest)
             dest_candidate = dest_path if not dest_path.suffix else dest_path.parent
             if str(dest_candidate):
