@@ -170,10 +170,14 @@ def parse_args():
     p.add_argument('-r','--recursive', action='store_true', help="Recurse subdirectories")
     p.add_argument('-d','--ddwometadata', action='store_true',
                    help="Raw dedupe by data (XXH64) between source & dest")
-    p.add_argument('-D','--deldupi', action='store_true',
-                   help="Force metadata dedupe on source (now enabled by default)")
-    p.add_argument('-X','--dedupsourceanddest', action='store_true',
-                   help="Force metadata dedupe on source and destination pre-move (now default when destination specified)")
+    p.add_argument('-D','--deldupi', dest='deldupi', action='store_true', default=True,
+                   help="Force metadata dedupe on source (use --no-deldupi to skip)")
+    p.add_argument('--no-deldupi', dest='deldupi', action='store_false',
+                   help="Skip metadata dedupe on source before processing")
+    p.add_argument('-X','--dedupsourceanddest', dest='dedupsourceanddest', action='store_true', default=None,
+                   help="Force metadata dedupe on source and destination pre-move (auto unless disabled)")
+    p.add_argument('--no-dedupsourceanddest', dest='dedupsourceanddest', action='store_false',
+                   help="Skip metadata dedupe between source and destination before processing")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
@@ -737,12 +741,16 @@ def pipeline(args):
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
-    # Always dedupe the source first to ensure we work with a clean input set.
-    metadata_dedupe(src, args.dry_run)
+    # Optionally dedupe the source first to ensure we work with a clean input set.
+    if args.deldupi:
+        metadata_dedupe(src, args.dry_run)
 
     # When a distinct destination is provided (or explicitly requested),
-    # also dedupe source against destination by default.
-    if (dest_is_distinct or args.dedupsourceanddest) and dest_abs != src_abs:
+    # also dedupe source against destination by default unless disabled.
+    dedupe_src_dest = args.dedupsourceanddest
+    if dedupe_src_dest is None:
+        dedupe_src_dest = dest_is_distinct
+    if dedupe_src_dest and dest_abs != src_abs:
         metadata_dedupe_source_against_dest(src, dest, args.dry_run)
     if args.ddwometadata:
         raw_dedupe(src, dest, args.dry_run)
