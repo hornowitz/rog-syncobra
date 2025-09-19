@@ -104,6 +104,8 @@ def has_matching_media(found_exts, candidates):
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
 LOGFILE = '/var/log/rog-syncobra/rog-syncobra.log'
+STATE_DIR = '/var/lib/rog-syncobra'
+PHOTOPRISM_PENDING_FILE = os.path.join(STATE_DIR, 'pending-photoprism-commands.txt')
 #────────────────────────────────────────────────────────────────────────────────
 
 # ─── Logging setup ─────────────────────────────────────────────────────────────
@@ -183,6 +185,89 @@ class OperationTracker:
 operation_tracker = OperationTracker()
 
 
+def load_pending_photoprism_commands() -> list[str]:
+    try:
+        with open(PHOTOPRISM_PENDING_FILE, 'r', encoding='utf-8') as handle:
+            commands: list[str] = []
+            seen: set[str] = set()
+            for line in handle:
+                command = line.strip()
+                if not command or command in seen:
+                    continue
+                commands.append(command)
+                seen.add(command)
+            return commands
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        logger.warning(
+            "Unable to read pending Photoprism commands from %s: %s",
+            PHOTOPRISM_PENDING_FILE,
+            exc,
+        )
+        return []
+
+
+def save_pending_photoprism_commands(commands: list[str]) -> None:
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(PHOTOPRISM_PENDING_FILE, 'w', encoding='utf-8') as handle:
+            for command in commands:
+                handle.write(command + '\n')
+    except OSError as exc:
+        logger.warning(
+            "Unable to persist pending Photoprism commands to %s: %s",
+            PHOTOPRISM_PENDING_FILE,
+            exc,
+        )
+
+
+def handle_photoprism_index(command: str, dry_run: bool, changes_detected: bool) -> None:
+    if not command:
+        return
+
+    command = command.strip()
+    if not command:
+        return
+
+    if dry_run:
+        if changes_detected:
+            logger.info(
+                "[DRY] Would schedule Photoprism index command: %s",
+                command,
+            )
+        else:
+            logger.info("[DRY] Photoprism index command configured but no changes detected")
+        return
+
+    pending = load_pending_photoprism_commands()
+
+    if changes_detected and command not in pending:
+        pending.append(command)
+        save_pending_photoprism_commands(pending)
+
+    if not pending:
+        return
+
+    remaining = pending[:]
+    for idx, pending_command in enumerate(pending):
+        logger.info("Running Photoprism index command: %s", pending_command)
+        try:
+            subprocess.run(pending_command, shell=True, check=True)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            logger.warning(
+                "Photoprism index command failed (%s); will retry later",
+                exc,
+            )
+            remaining = pending[idx:]
+            break
+        else:
+            logger.info("Photoprism index command completed successfully")
+            remaining = pending[idx + 1 :]
+
+    save_pending_photoprism_commands(remaining)
+
+
 def check_program(name):
     if not shutil.which(name):
         logger.error(f"Required program '{name}' not found in PATH.")
@@ -249,6 +334,12 @@ def parse_args():
                    help="Run metadata dedupe on destination after processing completes")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
+    p.add_argument('--photoprism-index-command', default='',
+                   help=(
+                       "Shell command to trigger Photoprism indexing after files are processed. "
+                       "The command is executed via /bin/sh -c whenever changes occur, and "
+                       "failed runs are retried on the next invocation."
+                   ))
 
     # Use parse_known_args so we can gracefully ignore stray '-' arguments.
     # A single dash can sneak in via misconfigured systemd unit files or
@@ -460,7 +551,7 @@ def exif_sort(src, dest, args):
                 "Skipping exiftool processing in %s (no media files detected)", src_abs
             )
         os.chdir(cwd)
-        return
+        return False
 
     jobs = []
 
@@ -678,6 +769,7 @@ def exif_sort(src, dest, args):
     else:
         logger.info("Skipping DCIM & misc processing (no supported media detected)")
 
+    result = False
     try:
         if args.dry_run:
             for cmd, extra_targets in jobs:
@@ -686,14 +778,17 @@ def exif_sort(src, dest, args):
                     continue
                 full_cmd = [*cmd, *target_list]
                 logger.info("[DRY] " + " ".join(full_cmd))
-            return
+            return False
 
         if not jobs:
-            return
+            return False
 
         run_worker(1, targets)
+        result = True
     finally:
         os.chdir(cwd)
+
+    return result
 
 def archive_old(src, archive_dir, years, dry_run=False):
     """
@@ -794,7 +889,7 @@ def pipeline(args):
         metadata_dedupe_source_against_dest(src, dest, args.dry_run)
     if args.ddwometadata:
         raw_dedupe(src, dest, args.dry_run)
-    exif_sort(src, dest, args)
+    exif_changed = exif_sort(src, dest, args)
     if args.archive_dir:
         archive_old(dest if args.move2targetdir else src,
                     args.archive_dir,
@@ -805,6 +900,13 @@ def pipeline(args):
         metadata_dedupe(dest, args.dry_run)
 
     operation_tracker.log_summary()
+
+    changes_detected = bool(exif_changed or operation_tracker.deleted or operation_tracker.moved)
+    handle_photoprism_index(
+        args.photoprism_index_command,
+        args.dry_run,
+        changes_detected,
+    )
 
 def main():
     args = parse_args()

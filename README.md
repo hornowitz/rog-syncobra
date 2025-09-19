@@ -47,6 +47,9 @@ To automatically install missing packages run:
 - `-F, --dedup-destination-final` – run metadata dedupe on the destination after the
   pipeline finishes moving files
 - `--install-deps` – install required system packages and exit
+- `--photoprism-index-command CMD` – run `CMD` via `/bin/sh -c` after changes are
+  made so Photoprism can index new or removed files; failed runs are retried on the
+  next invocation
 
 ## Systemd service
 An example systemd **template** unit is provided in `rog-syncobra@.service`. It
