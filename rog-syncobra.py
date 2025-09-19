@@ -259,13 +259,38 @@ class PhotoprismAPIClient:
         try:
             return self.opener.open(request)
         except urllib.error.HTTPError as exc:
-            raise PhotoprismAPIError(f"HTTP {exc.code}: {exc.reason}") from exc
+            response_details = []
+            try:
+                body_bytes = exc.read()
+            except Exception:
+                body_bytes = b''
+            if body_bytes:
+                try:
+                    decoded = body_bytes.decode('utf-8', errors='replace')
+                except Exception:
+                    decoded = repr(body_bytes[:256])
+                decoded = " ".join(decoded.split())
+                if len(decoded) > 512:
+                    decoded = decoded[:509] + '...'
+                response_details.append(f"body={decoded}")
+            auth_header = getattr(exc, 'headers', None)
+            if auth_header and auth_header.get('WWW-Authenticate'):
+                response_details.append(
+                    f"www-authenticate={auth_header.get('WWW-Authenticate')}"
+                )
+            detail = f" ({'; '.join(response_details)})" if response_details else ''
+            raise PhotoprismAPIError(
+                f"HTTP {exc.code} {exc.reason} for {exc.url}{detail}"
+            ) from exc
         except urllib.error.URLError as exc:
             raise PhotoprismAPIError(str(exc.reason)) from exc
 
     def login(self) -> None:
         if self._logged_in:
             return
+        logger.debug(
+            "PhotoprismAPI: logging in as %s", self.config.username or '<unknown>'
+        )
         payload = json.dumps(
             {'username': self.config.username, 'password': self.config.password}
         ).encode('utf-8')
@@ -281,6 +306,13 @@ class PhotoprismAPIClient:
 
     def trigger_index(self, path: str, rescan: bool, cleanup: bool) -> None:
         self.login()
+        logger.debug(
+            "PhotoprismAPI: POST %s path=%s rescan=%s cleanup=%s",
+            self._url('/api/v1/index'),
+            path,
+            rescan,
+            cleanup,
+        )
         payload = json.dumps(
             {'path': path, 'rescan': rescan, 'cleanup': cleanup}
         ).encode('utf-8')
@@ -514,6 +546,55 @@ def handle_photoprism_index(
 
     save_pending_photoprism_tasks(remaining)
 
+
+def run_photoprism_api_only(args) -> None:
+    base_url = args.photoprism_api_base_url.strip()
+    if not base_url or not args.photoprism_api_username or not args.photoprism_api_password:
+        logger.error(
+            "Photoprism API call requested but credentials are incomplete; "
+            "please provide base URL, username, and password",
+        )
+        sys.exit(1)
+
+    api_config = PhotoprismAPIConfig(
+        base_url=base_url,
+        username=args.photoprism_api_username,
+        password=args.photoprism_api_password,
+        verify_tls=not args.photoprism_api_insecure,
+        rescan=args.photoprism_api_rescan,
+        cleanup=args.photoprism_api_cleanup,
+    )
+
+    library_root = Path(os.path.abspath(args.move2targetdir or args.inputdir))
+    raw_targets = args.photoprism_api_call or ['/']
+    targets: list[Path] = []
+    for raw in raw_targets:
+        raw = (raw or '/').strip()
+        if raw in ('', '/'):
+            targets.append(library_root)
+            continue
+        expanded = os.path.expanduser(raw)
+        candidate = Path(expanded)
+        if candidate.is_absolute():
+            resolved = Path(os.path.abspath(str(candidate)))
+        else:
+            resolved = Path(os.path.abspath(str(library_root / candidate)))
+        targets.append(resolved)
+
+    logger.info(
+        "Photoprism API only mode: triggering index for %s",
+        ", ".join(str(t) for t in targets) if targets else '/',
+    )
+
+    handle_photoprism_index(
+        args.dry_run,
+        True,
+        targets,
+        library_root,
+        api_config,
+    )
+
+
 def check_program(name):
     if not shutil.which(name):
         logger.error(f"Required program '{name}' not found in PATH.")
@@ -592,6 +673,18 @@ def parse_args():
                    help="Ask Photoprism to run cleanup after indexing via the API")
     p.add_argument('-T','--photoprism-api-insecure', action='store_true',
                    help="Disable TLS certificate verification for Photoprism API calls")
+    p.add_argument(
+        '--photoprism-api-call',
+        metavar='PATH',
+        action='append',
+        nargs='?',
+        const='/',
+        default=[],
+        help=(
+            "Trigger the Photoprism API for PATH (defaults to '/') and exit without "
+            "performing any other processing; may be specified multiple times"
+        ),
+    )
 
     # Use parse_known_args so we can gracefully ignore stray '-' arguments.
     # A single dash can sneak in via misconfigured systemd unit files or
@@ -1184,6 +1277,9 @@ def main():
     args = parse_args()
     if args.install_deps:
         install_requirements()
+        return
+    if args.photoprism_api_call:
+        run_photoprism_api_only(args)
         return
     for cmd in ('exiftool','xxhsum','sort','du','df'):
         check_program(cmd)
