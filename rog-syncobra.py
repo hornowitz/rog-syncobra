@@ -465,6 +465,49 @@ def _dedupe_tasks(tasks: Sequence[PhotoprismTask]) -> list[PhotoprismTask]:
     return deduped
 
 
+def _task_within_library_root(task: PhotoprismTask, library_root: Optional[Path]) -> bool:
+    """Return True if *task* refers to a path that lives under *library_root*."""
+
+    if library_root is None:
+        return True
+
+    normalized_root = Path(_expand_path(str(library_root)))
+    candidates = [task.display_path, task.path]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        # The Photoprism API accepts '/' to mean "library root" regardless of
+        # the actual filesystem layout, so treat it as always valid here.
+        if candidate == '/':
+            return True
+
+        candidate_path = Path(candidate)
+
+        # Relative paths are interpreted with respect to the library root, so
+        # they are always considered valid.
+        if not candidate_path.is_absolute():
+            return True
+
+        try:
+            expanded = Path(_expand_path(str(candidate_path)))
+        except OSError:
+            continue
+
+        if expanded == normalized_root:
+            return True
+
+        try:
+            expanded.relative_to(normalized_root)
+        except ValueError:
+            continue
+        else:
+            return True
+
+    return False
+
+
 def handle_photoprism_index(
     dry_run: bool,
     changes_detected: bool,
@@ -570,6 +613,19 @@ def handle_photoprism_index(
 
     new_tasks = _dedupe_tasks(api_tasks)
     pending = load_pending_photoprism_tasks()
+
+    if dest_root_path is not None and pending:
+        filtered: list[PhotoprismTask] = []
+        for task in pending:
+            if _task_within_library_root(task, dest_root_path):
+                filtered.append(task)
+            else:
+                display_target = task.display_path or task.path or '/'
+                logger.info(
+                    'Dropping Photoprism task outside library root: %s',
+                    display_target,
+                )
+        pending = filtered
 
     if dry_run:
         if changes_detected:
