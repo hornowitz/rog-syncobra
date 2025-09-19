@@ -172,8 +172,8 @@ def parse_args():
                    help="Raw dedupe by data (XXH64) between source & dest")
     p.add_argument('-D','--deldupi', action='store_true',
                    help="Metadata dedupe by xxhash rdfind-like scanner on source")
-    p.add_argument('-X','--deldupidest', action='store_true',
-                   help="Metadata dedupe by xxhash rdfind-like scanner on destination")
+    p.add_argument('-X','--dedupsourceanddest', action='store_true',
+                   help="Metadata dedupe by xxhash rdfind-like scanner on source, then against destination")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
@@ -733,9 +733,13 @@ def pipeline(args):
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
-    if args.deldupidest and dest_abs != src_abs:
-        metadata_dedupe_source_against_dest(src, dest, args.dry_run)
-    if args.deldupi:
+    ran_source_dedupe = False
+    if args.dedupsourceanddest:
+        metadata_dedupe(src, args.dry_run)
+        ran_source_dedupe = True
+        if dest_abs != src_abs:
+            metadata_dedupe_source_against_dest(src, dest, args.dry_run)
+    if args.deldupi and not ran_source_dedupe:
         metadata_dedupe(src, args.dry_run)
     if args.ddwometadata:
         raw_dedupe(src, dest, args.dry_run)
