@@ -458,7 +458,7 @@ def exif_sort(src, dest, args):
                     line = proc.stdout.readline()
                     if not line:
                         raise RuntimeError('exiftool terminated unexpectedly')
-                    line = line.rstrip()
+                    line = line.strip()
                     if line == '{ready}':
                         break
                     if line.lower().startswith('error'):
