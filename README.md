@@ -44,7 +44,7 @@ To automatically install missing packages run:
 - `--archive-dir DIR` – directory to archive old files to
 - `--archive-years YEARS` – move directories older than this many years (default: 2)
 - `--skip-marker NAME` – skip directories that contain `NAME` (default: `.rog-syncobraignore`; set to an empty string to disable)
-- `--dedup-destination-final` – run metadata dedupe on the destination after the
+- `-F, --dedup-destination-final` – run metadata dedupe on the destination after the
   pipeline finishes moving files
 - `--install-deps` – install required system packages and exit
 
