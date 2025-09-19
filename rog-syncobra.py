@@ -224,6 +224,7 @@ class PhotoprismAPIConfig:
     verify_tls: bool = True
     rescan: bool = False
     cleanup: bool = False
+    path_strip_prefixes: tuple[str, ...] = ()
 
 
 class PhotoprismAPIError(Exception):
@@ -304,6 +305,37 @@ class PhotoprismAPIClient:
             '/api/v1/index',
             payload={'path': path, 'rescan': rescan, 'cleanup': cleanup},
         )
+
+
+def _strip_photoprism_prefixes(path: str, prefixes: Sequence[str]) -> str:
+    if not prefixes:
+        return path
+
+    cleaned = path
+    leading_slash = cleaned.startswith('/')
+    normalized = cleaned.lstrip('/')
+
+    # Try the longest prefixes first so nested paths strip correctly.
+    unique_prefixes = {
+        p.strip() for p in prefixes if p and p.strip()
+    }
+    for prefix in sorted(unique_prefixes, key=len, reverse=True):
+        normalized_prefix = prefix.strip('/').strip()
+        if not normalized_prefix:
+            continue
+
+        candidate = normalized
+        if candidate == normalized_prefix:
+            normalized = ''
+            break
+        if candidate.startswith(normalized_prefix + '/'):
+            normalized = candidate[len(normalized_prefix) + 1 :]
+            break
+
+    if not normalized:
+        return '/' if leading_slash else ''
+
+    return f"/{normalized}" if leading_slash else normalized
 
 
 def collect_photoprism_targets(
@@ -427,6 +459,7 @@ def handle_photoprism_index(
     targets: Sequence[Path],
     library_root: Union[Path, None],
     api_config: Optional[PhotoprismAPIConfig],
+    display_root: Union[Path, str, None] = None,
 ) -> None:
     have_api = bool(
         api_config
@@ -449,6 +482,15 @@ def handle_photoprism_index(
         normalized_targets.append(normalized)
 
     dest_root_path = Path(os.path.abspath(str(library_root))) if library_root else None
+    display_root_path: Optional[Path]
+    if display_root is None:
+        display_root_path = None
+    else:
+        try:
+            display_root_path = Path(display_root)
+        except TypeError:
+            display_root_path = None
+
     api_tasks: list[PhotoprismTask] = []
     for target in normalized_targets:
         path_value = ''
@@ -461,12 +503,26 @@ def handle_photoprism_index(
                     target,
                 )
                 continue
-            path_value = str(relative)
-            if path_value == '.':
-                path_value = ''
+            relative_path = Path(relative)
         else:
-            path_value = str(target)
-        path_value = path_value or '/'
+            relative_path = None
+
+        if display_root_path is not None and relative_path is not None:
+            display_path = display_root_path / relative_path
+            path_value = display_path.as_posix()
+        elif relative_path is not None:
+            path_value = relative_path.as_posix()
+        else:
+            path_value = target.as_posix()
+
+        if api_config and api_config.path_strip_prefixes:
+            path_value = _strip_photoprism_prefixes(
+                path_value,
+                api_config.path_strip_prefixes,
+            )
+
+        if path_value in ('', '.'):
+            path_value = '/'
         api_tasks.append(
             PhotoprismTask(
                 path=path_value,
@@ -550,9 +606,11 @@ def run_photoprism_api_only(args) -> None:
         verify_tls=not args.photoprism_api_insecure,
         rescan=args.photoprism_api_rescan,
         cleanup=args.photoprism_api_cleanup,
+        path_strip_prefixes=tuple(args.photoprism_api_strip_prefix or ()),
     )
 
     library_root = Path(os.path.abspath(args.move2targetdir or args.inputdir))
+    display_root = Path(args.move2targetdir or args.inputdir)
     raw_targets = args.photoprism_api_call or ['/']
     targets: list[Path] = []
     for raw in raw_targets:
@@ -579,6 +637,7 @@ def run_photoprism_api_only(args) -> None:
         targets,
         library_root,
         api_config,
+        display_root,
     )
 
 
@@ -660,6 +719,16 @@ def parse_args():
                    help="Ask Photoprism to run cleanup after indexing via the API")
     p.add_argument('-T','--photoprism-api-insecure', action='store_true',
                    help="Disable TLS certificate verification for Photoprism API calls")
+    p.add_argument(
+        '--photoprism-api-strip-prefix',
+        metavar='PREFIX',
+        action='append',
+        default=[],
+        help=(
+            "Strip PREFIX from the beginning of paths before they are sent to the "
+            "Photoprism API. May be specified multiple times."
+        ),
+    )
     p.add_argument(
         '--photoprism-api-call',
         metavar='PATH',
@@ -1236,6 +1305,7 @@ def pipeline(args):
         exif_changed or operation_tracker.deleted or operation_tracker.moved
     )
     library_root = Path(dest_abs if dest_is_distinct else src_abs)
+    display_root = Path(args.move2targetdir or args.inputdir)
     photoprism_targets = collect_photoprism_targets(
         operation_tracker,
         library_root,
@@ -1251,6 +1321,7 @@ def pipeline(args):
             verify_tls=not args.photoprism_api_insecure,
             rescan=args.photoprism_api_rescan,
             cleanup=args.photoprism_api_cleanup,
+            path_strip_prefixes=tuple(args.photoprism_api_strip_prefix or ()),
         )
     handle_photoprism_index(
         args.dry_run,
@@ -1258,6 +1329,7 @@ def pipeline(args):
         photoprism_targets,
         library_root,
         api_config,
+        display_root,
     )
 
 def main():
