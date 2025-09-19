@@ -49,7 +49,9 @@ To automatically install missing packages run:
 - `--install-deps` – install required system packages and exit
 - `--photoprism-index-command CMD` – run `CMD` via `/bin/sh -c` after changes are
   made so Photoprism can index new or removed files; failed runs are retried on the
-  next invocation
+  next invocation. The placeholders `{path}`, `{relative}`, and `{dest}` expand to
+  the absolute directory path, the path relative to the destination root, and the
+  destination root respectively.
 
 ## Systemd service
 An example systemd **template** unit is provided in `rog-syncobra@.service`. It
