@@ -146,7 +146,14 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                 return base
             current = current.parent
 
+    seen_paths: set[Path] = set()
+
     for f, root in raw_files:
+        resolved = f.resolve()
+        if resolved in seen_paths:
+            logger.debug("Skipping already queued path %s", f)
+            continue
+        seen_paths.add(resolved)
         root_cache = cache_root_for(f, root) if use_cache else root
         root_map[f] = root_cache
         if use_cache and root_cache not in cache_map:
