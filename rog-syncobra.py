@@ -463,18 +463,13 @@ def exif_sort(src, dest, args):
                     ['-ext', 'MP4', '-ext', 'MOV'],
                     WHATSAPP_VIDEO_EXTS,
                 ),
-                # WhatsApp Videos (3GP – Variante 1)
+                # WhatsApp Videos (3GP)
                 (
                     r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
                     ['-ext', '3GP'],
                     {'.3gp'},
                 ),
-                # WhatsApp Videos (3GP – Variante 2, ohne EncodingProcess-Check)
-                (
-                    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i",
-                    ['-ext', '3GP'],
-                    {'.3gp'},
-                ),
+
             ]
             for cond, exts, required in blocks:
                 if required and not has_matching_media(present_exts, required):
