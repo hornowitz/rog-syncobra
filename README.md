@@ -51,7 +51,23 @@ To automatically install missing packages run:
   made so Photoprism can index new or removed files; failed runs are retried on the
   next invocation. The placeholders `{path}`, `{relative}`, and `{dest}` expand to
   the absolute directory path, the path relative to the destination root, and the
-  destination root respectively.
+  destination root respectively. Appending `_q` (for example `{path_q}`) inserts a
+  shell-quoted version suitable for commands such as `kubectl exec`.
+
+### Photoprism index examples
+
+Trigger Photoprism directly for each affected directory:
+
+```bash
+./rog-syncobra.py --photoprism-index-command "photoprism index -f -c {path_q}"
+```
+
+Run indexing inside a Kubernetes-managed Photoprism instance:
+
+```bash
+./rog-syncobra.py --photoprism-index-command \
+  "kubectl exec --stdin --tty -n photoprism pod/photoprism-0 -- photoprism index -f -c {path_q}"
+```
 
 ## Systemd service
 An example systemd **template** unit is provided in `rog-syncobra@.service`. It
