@@ -36,6 +36,13 @@ MEDIA_SCAN_EXTS = (
     | DCIM_EXTS
 )
 
+
+def _expand_path(path: str) -> str:
+    """Return a normalized absolute path with user expansion."""
+
+    return os.path.abspath(os.path.expanduser(path))
+
+
 def normalize_extensions(exts):
     if not exts:
         return set()
@@ -62,7 +69,7 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
     stack = [root]
     while stack:
         current = stack.pop()
-        current_abs = os.path.abspath(current)
+        current_abs = _expand_path(current)
         if skip_paths and any(
             current_abs == skip or current_abs.startswith(f"{skip}{os.sep}")
             for skip in skip_paths
@@ -81,7 +88,7 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
                                 continue
                             found.add(ext)
                         elif recursive and entry.is_dir(follow_symlinks=False):
-                            entry_abs = os.path.abspath(entry.path)
+                            entry_abs = _expand_path(entry.path)
                             if skip_paths and any(
                                 entry_abs == skip or entry_abs.startswith(f"{skip}{os.sep}")
                                 for skip in skip_paths
@@ -344,14 +351,14 @@ def collect_photoprism_targets(
 
     for candidate in tracker.photoprism_target_directories():
         try:
-            resolved = Path(os.path.abspath(str(candidate)))
+            resolved = Path(_expand_path(str(candidate)))
         except OSError:
             continue
         targets.add(resolved)
 
     if exif_changed and library_root is not None:
         try:
-            root_path = Path(os.path.abspath(str(library_root)))
+            root_path = Path(_expand_path(str(library_root)))
         except OSError:
             root_path = None
         else:
@@ -479,20 +486,20 @@ def handle_photoprism_index(
     normalized_targets: list[Path] = []
     seen_paths: set[str] = set()
     for target in targets:
-        normalized = Path(os.path.abspath(str(target)))
+        normalized = Path(_expand_path(str(target)))
         key = str(normalized)
         if key in seen_paths:
             continue
         seen_paths.add(key)
         normalized_targets.append(normalized)
 
-    dest_root_path = Path(os.path.abspath(str(library_root))) if library_root else None
+    dest_root_path = Path(_expand_path(str(library_root))) if library_root else None
     display_root_path: Optional[Path]
     if display_root is None:
         display_root_path = None
     else:
         try:
-            display_root_path = Path(display_root)
+            display_root_path = Path(_expand_path(str(display_root)))
         except TypeError:
             display_root_path = None
 
@@ -632,8 +639,9 @@ def run_photoprism_api_only(args) -> None:
         path_strip_prefixes=tuple(args.photoprism_api_strip_prefix or ()),
     )
 
-    library_root = Path(os.path.abspath(args.move2targetdir or args.inputdir))
-    display_root = Path(args.move2targetdir or args.inputdir)
+    destination_root = args.move2targetdir or args.inputdir
+    library_root = Path(_expand_path(destination_root))
+    display_root = library_root
     raw_targets = args.photoprism_api_call or ['/']
     targets: list[Path] = []
     for raw in raw_targets:
@@ -644,9 +652,9 @@ def run_photoprism_api_only(args) -> None:
         expanded = os.path.expanduser(raw)
         candidate = Path(expanded)
         if candidate.is_absolute():
-            resolved = Path(os.path.abspath(str(candidate)))
+            resolved = Path(_expand_path(str(candidate)))
         else:
-            resolved = Path(os.path.abspath(str(library_root / candidate)))
+            resolved = Path(_expand_path(str(library_root / candidate)))
         targets.append(resolved)
 
     logger.info(
@@ -817,7 +825,7 @@ def check_disk_space(src, dest, dry_run=False):
 
 def check_year_mount(dest):
     """Ensure the destination's current year directory exists and is mounted."""
-    year_dir = os.path.join(os.path.abspath(dest), datetime.now().strftime('%Y'))
+    year_dir = os.path.join(_expand_path(dest), datetime.now().strftime('%Y'))
     if not os.path.isdir(year_dir):
         logger.error(f"Year directory {year_dir} does not exist")
         sys.exit(1)
@@ -860,8 +868,8 @@ def metadata_dedupe(path, dry_run=False):
 
 
 def metadata_dedupe_source_against_dest(src, dest, dry_run=False):
-    src_abs = os.path.abspath(src)
-    dest_abs = os.path.abspath(dest)
+    src_abs = _expand_path(src)
+    dest_abs = _expand_path(dest)
     prefix = "[DRY] " if dry_run else ""
     logger.info(
         f"{prefix}Metadata dedupe via xxrdfind between destination ({dest_abs}) and source ({src_abs}); deleting duplicates from source"
@@ -876,8 +884,8 @@ def metadata_dedupe_source_against_dest(src, dest, dry_run=False):
 
 def raw_dedupe(src, dest, dry_run=False, *_, **__):
     paths = []
-    dest_abs = os.path.abspath(dest) if dest else None
-    src_abs = os.path.abspath(src)
+    dest_abs = _expand_path(dest) if dest else None
+    src_abs = _expand_path(src)
     if dest_abs and dest_abs != src_abs:
         paths.append(dest_abs)
     paths.append(src_abs)
@@ -887,7 +895,7 @@ def raw_dedupe(src, dest, dry_run=False, *_, **__):
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
-    src_abs = os.path.abspath(src)
+    src_abs = _expand_path(src)
     os.chdir(src_abs)
     vflag = '-v' if args.debug else '-q'
     ym = '%Y/%m' if args.year_month_sort else '.'
@@ -899,7 +907,7 @@ def exif_sort(src, dest, args):
         if rel_path in skip_rel:
             return
         skip_rel.add(rel_path)
-        abs_path = os.path.abspath(os.path.join(src_abs, rel_path))
+        abs_path = _expand_path(os.path.join(src_abs, rel_path))
         skip_abs.add(abs_path)
 
     if skip_marker:
@@ -1219,8 +1227,8 @@ def archive_old(src, archive_dir, years, dry_run=False):
     into the matching structure under `archive_dir`, but only if there’s
     sufficient free space on the archive filesystem.
     """
-    src_abs  = os.path.abspath(src)
-    arch_abs = os.path.abspath(archive_dir)
+    src_abs = _expand_path(src)
+    arch_abs = _expand_path(archive_dir)
 
     # Only proceed if the archive mount is available
     if not os.path.ismount(arch_abs):
@@ -1289,10 +1297,11 @@ def archive_old(src, archive_dir, years, dry_run=False):
 
 
 def pipeline(args):
-    src = args.inputdir
-    dest = (args.move2targetdir or src).rstrip('/')
-    src_abs = os.path.abspath(src)
-    dest_abs = os.path.abspath(dest)
+    src = os.path.expanduser(args.inputdir)
+    dest_root = args.move2targetdir or src
+    dest = os.path.expanduser(dest_root).rstrip('/') or '/'
+    src_abs = _expand_path(src)
+    dest_abs = _expand_path(dest)
     dest_specified = bool(args.move2targetdir)
     dest_is_distinct = dest_specified and dest_abs != src_abs
     operation_tracker.reset()
@@ -1328,7 +1337,7 @@ def pipeline(args):
         exif_changed or operation_tracker.deleted or operation_tracker.moved
     )
     library_root = Path(dest_abs if dest_is_distinct else src_abs)
-    display_root = Path(args.move2targetdir or args.inputdir)
+    display_root = library_root
     photoprism_targets = collect_photoprism_targets(
         operation_tracker,
         library_root,
