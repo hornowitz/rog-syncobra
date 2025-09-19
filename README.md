@@ -26,7 +26,9 @@ To automatically install missing packages run:
 
 - `-r, --recursive` – recurse into subdirectories
 - `-d, --ddwometadata` – raw dedupe by XXH64 between source and destination
-- `-D, --deldupi` – metadata dedupe by bundled xxhash scanner on source
+- `-D, --deldupi` – metadata dedupe by bundled xxhash scanner on source (runs before
+  `--ddwometadata` so the lighter metadata pass can remove duplicates before the
+  raw scan)
 - `-X, --dedupsourceanddest` – metadata dedupe on source, then compare against destination
 - `-y, --year-month-sort` – sort into `Year/Month` directories (default on)
 - `-Y, --check-year-mount` – verify that the current year's folder under the

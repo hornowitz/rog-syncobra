@@ -734,13 +734,15 @@ def pipeline(args):
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
     ran_source_dedupe = False
-    if args.dedupsourceanddest:
+    if args.deldupi:
         metadata_dedupe(src, args.dry_run)
         ran_source_dedupe = True
+    if args.dedupsourceanddest:
+        if not ran_source_dedupe:
+            metadata_dedupe(src, args.dry_run)
+            ran_source_dedupe = True
         if dest_abs != src_abs:
             metadata_dedupe_source_against_dest(src, dest, args.dry_run)
-    if args.deldupi and not ran_source_dedupe:
-        metadata_dedupe(src, args.dry_run)
     if args.ddwometadata:
         raw_dedupe(src, dest, args.dry_run)
     exif_sort(src, dest, args)
