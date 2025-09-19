@@ -200,7 +200,7 @@ def parse_args():
                    help="Move directories older than this many years (default 2)")
     p.add_argument('--skip-marker', default='.rog-syncobraignore',
                    help="Filename that marks directories to skip (set to '' to disable)")
-    p.add_argument('--dedup-destination-final', action='store_true',
+    p.add_argument('-F','--dedup-destination-final', action='store_true',
                    help="Run metadata dedupe on destination after processing completes")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
