@@ -491,37 +491,35 @@ def exif_sort(src, dest, args):
             queue(cmd)
 
     if dcim_present:
-        logger.info("DCIM & misc processing")
+        logger.info("Misc vid processing")
+        cmd = [
+            'exiftool', vflag,
+            '-if', 'not defined $Keywords',
+            '-if', 'not defined $model',
+            "-FileName<${FileModifyDate}%-c.%e",
+            '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
+            '-ext', 'mp4',
+            '-ext', '3gp',
+            '-ext', 'mov',
+            '-ext', 'mts',
+            '-ext', 'avi',
+            '-ext', 'vob',
+        ]
+        queue(cmd)
+        logger.info("DCIM processing")
         cmd = [
             'exiftool', vflag,
             '-if','not defined $Keywords',
             '-Filename<${ModifyDate}%-c.%e',
             '-Filename<${DateTimeOriginal}%-c.%e',
             '-Filename<${CreateDate}%-c.%e',
-            '-Filename<${CreateDate} ${model;}%-c.%e',
-            '-Filename<${CreationDate} ${model;}%-c.%e',
-            '-Filename<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
-            '-Filename<${CreationDate}_$SubSecTimeOriginal ${model;}%-c.%e',
+            '-Filename<${CreateDate} ${model}%-c.%e',
+            '-Filename<${CreationDate} ${model}%-c.%e',
+            '-Filename<${CreateDate}_$SubSecTimeOriginal ${model}%-c.%e',
+            '-Filename<${CreationDate}_$SubSecTimeOriginal ${model}%-c.%e',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-            '-ext+','MPG','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
+            '-ext+','mpg','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
             '-ee'
-        ]
-        queue(cmd)
-        cmd = [
-            'exiftool', vflag,
-            '-if', 'not defined $Keywords',
-            '-if', 'not defined $model',
-            "-FileName<${FileModifyDate}%-c.%e",
-            '-d', '%Y-%m-%d %H-%M-%S',
-            '-ext', 'mp4',
-            '-ext', '3gp',
-            '-ext', 'mov',
-            '-ext', 'mts',
-            '-ext', 'jpg',
-            '-ext', 'png',
-            '-ext', 'avi',
-            '-ext', 'vob',
-            '-ext', 'jpeg',
         ]
         queue(cmd)
         cmd = [
