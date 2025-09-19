@@ -210,6 +210,7 @@ class PhotoprismTask:
     path: str = ''
     rescan: bool = False
     cleanup: bool = False
+    display_path: str = field(default='', compare=False)
 
 
 @dataclass
@@ -414,7 +415,13 @@ def _parse_photoprism_task(raw: str) -> Optional[PhotoprismTask]:
             path = payload.get('path', '')
             rescan = bool(payload.get('rescan', False))
             cleanup = bool(payload.get('cleanup', False))
-            return PhotoprismTask(path=path, rescan=rescan, cleanup=cleanup)
+            display_path = payload.get('display_path', path)
+            return PhotoprismTask(
+                path=path,
+                rescan=rescan,
+                cleanup=cleanup,
+                display_path=display_path,
+            )
         if mode == 'command':
             command = payload.get('command', '').strip()
             if command:
@@ -423,7 +430,8 @@ def _parse_photoprism_task(raw: str) -> Optional[PhotoprismTask]:
                 )
             return None
     if raw.startswith('API|'):
-        return PhotoprismTask(path=raw[4:])
+        value = raw[4:]
+        return PhotoprismTask(path=value, display_path=value)
     logger.debug("Ignoring legacy Photoprism command task entry: %s", raw)
     return None
 
@@ -434,6 +442,7 @@ def _serialize_photoprism_task(task: PhotoprismTask) -> str:
         'path': task.path,
         'rescan': task.rescan,
         'cleanup': task.cleanup,
+        'display_path': task.display_path or task.path,
     }
     return json.dumps(payload, sort_keys=True)
 
@@ -490,6 +499,7 @@ def handle_photoprism_index(
     api_tasks: list[PhotoprismTask] = []
     for target in normalized_targets:
         path_value = ''
+        display_value = ''
         if dest_root_path is not None:
             try:
                 relative = target.relative_to(dest_root_path)
@@ -500,16 +510,21 @@ def handle_photoprism_index(
                 )
                 continue
             relative_path = Path(relative)
+            absolute_dest = dest_root_path / relative_path
         else:
             relative_path = None
+            absolute_dest = target
 
         if display_root_path is not None and relative_path is not None:
             display_path = display_root_path / relative_path
-            path_value = display_path.as_posix()
+            display_value = display_path.as_posix()
+            path_value = display_value
         elif relative_path is not None:
+            display_value = absolute_dest.as_posix()
             path_value = relative_path.as_posix()
         else:
-            path_value = target.as_posix()
+            display_value = target.as_posix()
+            path_value = display_value
 
         if api_config and api_config.path_strip_prefixes:
             path_value = _strip_photoprism_prefixes(
@@ -519,20 +534,30 @@ def handle_photoprism_index(
 
         if path_value in ('', '.'):
             path_value = '/'
+        if not display_value:
+            display_value = path_value
         api_tasks.append(
             PhotoprismTask(
                 path=path_value,
                 rescan=api_config.rescan,
                 cleanup=api_config.cleanup,
+                display_path=display_value,
             )
         )
 
     if not api_tasks:
+        if display_root_path is not None:
+            default_display = display_root_path.as_posix()
+        elif dest_root_path is not None:
+            default_display = dest_root_path.as_posix()
+        else:
+            default_display = '/'
         api_tasks.append(
             PhotoprismTask(
                 path='/',
                 rescan=api_config.rescan,
                 cleanup=api_config.cleanup,
+                display_path=default_display,
             )
         )
 
@@ -543,9 +568,10 @@ def handle_photoprism_index(
         if changes_detected:
             for task in new_tasks:
                 if task not in pending:
+                    display_target = task.display_path or task.path or '/'
                     logger.info(
                         '[DRY] Would trigger Photoprism API index for: %s',
-                        task.path or '/',
+                        display_target,
                     )
         return
 
@@ -569,7 +595,8 @@ def handle_photoprism_index(
         return
 
     for idx, task in enumerate(pending):
-        logger.info('Triggering Photoprism API index for: %s', task.path or '/')
+        display_target = task.display_path or task.path or '/'
+        logger.info('Triggering Photoprism API index for: %s', display_target)
         try:
             api_client.trigger_index(task.path or '/', task.rescan, task.cleanup)
         except PhotoprismAPIError as exc:
