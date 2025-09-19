@@ -266,13 +266,16 @@ def check_year_mount(dest):
         sys.exit(1)
     logger.info(f"Verified mountpoint for {year_dir}")
 
-def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False):
+def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=None):
     script = os.path.join(os.path.dirname(__file__), 'xxrdfind.py')
     cmd = [sys.executable, script, '--delete', *paths]
     if strip_metadata:
         cmd.append('--strip-metadata')
     if dry_run:
         cmd.append('--dry-run')
+    if delete_within:
+        for root in delete_within:
+            cmd.extend(['--delete-within', root])
     logger.info(f"xxrdfind dedupe: {' '.join(cmd)}")
     if dry_run:
         logger.info("Dry run: skipping xxrdfind execution")
@@ -284,6 +287,21 @@ def metadata_dedupe(path, dry_run=False):
     prefix = "[DRY] " if dry_run else ""
     logger.info(f"{prefix}Metadata dedupe via xxrdfind: {path}")
     xxrdfind_dedupe([path], dry_run=dry_run, strip_metadata=False)
+
+
+def metadata_dedupe_source_against_dest(src, dest, dry_run=False):
+    src_abs = os.path.abspath(src)
+    dest_abs = os.path.abspath(dest)
+    prefix = "[DRY] " if dry_run else ""
+    logger.info(
+        f"{prefix}Metadata dedupe via xxrdfind between destination ({dest_abs}) and source ({src_abs}); deleting duplicates from source"
+    )
+    xxrdfind_dedupe(
+        [dest_abs, src_abs],
+        dry_run=dry_run,
+        strip_metadata=False,
+        delete_within=[src_abs],
+    )
 
 
 def raw_dedupe(src, dest, dry_run=False, *_, **__):
@@ -716,7 +734,7 @@ def pipeline(args):
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
     if args.deldupidest and dest_abs != src_abs:
-        metadata_dedupe(dest, args.dry_run)
+        metadata_dedupe_source_against_dest(src, dest, args.dry_run)
     if args.deldupi:
         metadata_dedupe(src, args.dry_run)
     if args.ddwometadata:
