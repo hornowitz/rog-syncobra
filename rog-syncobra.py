@@ -546,6 +546,56 @@ def handle_photoprism_index(
         except TypeError:
             display_root_path = None
 
+    def _format_display_target(task: PhotoprismTask) -> str:
+        """Return a human friendly path for *task* suitable for logging."""
+
+        def _resolve_candidate(value: str) -> Optional[str]:
+            if not value:
+                return None
+
+            candidate = value.strip()
+            if not candidate or candidate == '.':
+                return None
+
+            if candidate == '/':
+                base = display_root_path or dest_root_path
+                return base.as_posix() if base is not None else '/'
+
+            if candidate.startswith('/'):
+                normalized_candidate = candidate
+                base_candidates: list[Path] = []
+                if display_root_path is not None:
+                    base_candidates.append(display_root_path)
+                if dest_root_path is not None:
+                    base_candidates.append(dest_root_path)
+
+                for base in base_candidates:
+                    base_str = base.as_posix().rstrip('/') or '/'
+                    if normalized_candidate == base_str:
+                        return normalized_candidate
+                    if normalized_candidate.startswith(base_str + '/'):
+                        return normalized_candidate
+
+                base = display_root_path or dest_root_path
+                if base is not None:
+                    return (base / normalized_candidate.lstrip('/')).as_posix()
+                return normalized_candidate
+
+            base = display_root_path or dest_root_path
+            if base is not None:
+                return (base / candidate).as_posix()
+            return candidate
+
+        for candidate in (task.display_path, task.path):
+            resolved = _resolve_candidate(candidate)
+            if resolved:
+                return resolved
+
+        base = display_root_path or dest_root_path
+        if base is not None:
+            return base.as_posix()
+        return '/'
+
     api_tasks: list[PhotoprismTask] = []
     for target in normalized_targets:
         path_value = ''
@@ -620,7 +670,7 @@ def handle_photoprism_index(
             if _task_within_library_root(task, dest_root_path):
                 filtered.append(task)
             else:
-                display_target = task.display_path or task.path or '/'
+                display_target = _format_display_target(task)
                 logger.info(
                     'Dropping Photoprism task outside library root: %s',
                     display_target,
@@ -631,7 +681,7 @@ def handle_photoprism_index(
         if changes_detected:
             for task in new_tasks:
                 if task not in pending:
-                    display_target = task.display_path or task.path or '/'
+                    display_target = _format_display_target(task)
                     logger.info(
                         '[DRY] Would trigger Photoprism API index for: %s',
                         display_target,
@@ -658,7 +708,7 @@ def handle_photoprism_index(
         return
 
     for idx, task in enumerate(pending):
-        display_target = task.display_path or task.path or '/'
+        display_target = _format_display_target(task)
         logger.info('Triggering Photoprism API index for: %s', display_target)
         try:
             api_client.trigger_index(task.path or '/', task.rescan, task.cleanup)
