@@ -8,14 +8,15 @@ Usage:
     ./xxrdfind.py [options] DIR [DIR ...]
 
 Options:
-    -d, --delete          Remove duplicate files, keeping first instance (default: keep files).
-    -n, --dry-run         Show actions without deleting files (default: false).
-    -t, --threads N       Number of hashing worker threads (default: CPU count).
-    -l, --log-level L     Logging level (DEBUG, INFO, WARNING; default INFO).
-    -p, --no-progress     Disable progress bar (default: show progress).
-    -s, --strip-metadata  Hash file content with metadata removed (default: include metadata).
-    -r, --recursive       Recurse into subdirectories (default: enabled; use --no-recursive to disable).
-    -c, --cache           Use persistent hash cache (default: enabled; use --no-cache to disable).
+    -d, --delete             Remove duplicate files, keeping first instance (default: keep files).
+    -n, --dry-run            Show actions without deleting files (default: false).
+    -t, --threads N          Number of hashing worker threads (default: CPU count).
+    -l, --log-level L        Logging level (DEBUG, INFO, WARNING; default INFO).
+    -p, --no-progress        Disable progress bar (default: show progress).
+    -s, --strip-metadata     Hash file content with metadata removed (default: include metadata).
+    -r, --recursive          Recurse into subdirectories (default: enabled; use --no-recursive to disable).
+    -c, --cache              Use persistent hash cache (default: enabled; use --no-cache to disable).
+        --delete-within DIR  Restrict deletions to files under DIR (may be provided multiple times).
 """
 
 from __future__ import annotations
@@ -109,13 +110,27 @@ def iter_files(paths, recursive: bool = True):
 
 
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True,
-                    strip_metadata=False, recursive: bool = True, use_cache: bool = True):
+                    strip_metadata=False, recursive: bool = True, use_cache: bool = True,
+                    delete_roots: list[Path] | None = None):
     raw_files = list(iter_files(paths, recursive))
     logger.debug("Found %d files to process", len(raw_files))
     cache_map: dict[Path, dict] = {}
     root_map: dict[Path, Path] = {}
     all_files: list[tuple[Path, Path]] = []
     cache_root_cache: dict[Path, Path] = {}
+
+    delete_roots_resolved: set[Path] | None
+    if delete_roots:
+        delete_roots_resolved = {p.resolve() for p in delete_roots}
+    else:
+        delete_roots_resolved = None
+
+    def is_within(path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root)
+            return True
+        except ValueError:
+            return False
 
     def cache_root_for(path: Path, base: Path) -> Path:
         dir_path = path.parent
@@ -223,7 +238,20 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                 group_sorted = sorted(files)
                 logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
                 if delete:
-                    for f in group_sorted[1:]:
+                    if delete_roots_resolved is None:
+                        candidates = group_sorted[1:]
+                    else:
+                        delete_candidates = []
+                        keepers = []
+                        for candidate in group_sorted:
+                            if any(is_within(candidate, root) for root in delete_roots_resolved):
+                                delete_candidates.append(candidate)
+                            else:
+                                keepers.append(candidate)
+                        if not keepers and delete_candidates:
+                            delete_candidates = delete_candidates[1:]
+                        candidates = delete_candidates
+                    for f in candidates:
                         if dry_run:
                             logger.info("Would delete %s", f)
                         else:
@@ -232,6 +260,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                                 try:
                                     f.unlink()
                                     logger.info("Deleted %s", f)
+                                except FileNotFoundError:
+                                    logger.warning("Skipped deletion for %s: file missing", f)
                                 except OSError as e:
                                     logger.error("Failed to delete %s: %s", f, e)
                             else:
@@ -262,6 +292,8 @@ def main():
                    help="Use persistent hash cache (use --no-cache to disable)")
     p.add_argument('-r', '--recursive', action=argparse.BooleanOptionalAction, default=True,
                    help="Recurse into subdirectories (use --no-recursive to disable)")
+    p.add_argument('--delete-within', action='append', default=None,
+                   help="Restrict deletions to files under the specified directory")
     args = p.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
@@ -271,7 +303,8 @@ def main():
         find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
                         threads=args.threads, show_progress=not args.no_progress,
                         strip_metadata=args.strip_metadata, recursive=args.recursive,
-                        use_cache=args.cache)
+                        use_cache=args.cache,
+                        delete_roots=[Path(p) for p in args.delete_within] if args.delete_within else None)
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
 
