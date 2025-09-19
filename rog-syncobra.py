@@ -7,11 +7,7 @@ import logging
 import argparse
 import time
 import json
-import ssl
-import urllib.error
-import urllib.parse
-import urllib.request
-from http.cookiejar import CookieJar
+import requests
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -237,53 +233,45 @@ class PhotoprismAPIError(Exception):
 class PhotoprismAPIClient:
     def __init__(self, config: PhotoprismAPIConfig):
         self.config = config
-        self.cookie_jar = CookieJar()
-        handlers = [
-            urllib.request.HTTPHandler(),
-            urllib.request.HTTPCookieProcessor(self.cookie_jar),
-        ]
-        if config.verify_tls:
-            handlers.append(urllib.request.HTTPSHandler())
-            self.ssl_context = None
-        else:
-            self.ssl_context = ssl._create_unverified_context()
-            handlers.append(urllib.request.HTTPSHandler(context=self.ssl_context))
-        self.opener = urllib.request.build_opener(*handlers)
+        self.session = requests.Session()
+        self.session.verify = config.verify_tls
         self._logged_in = False
 
     def _url(self, path: str) -> str:
         base = self.config.base_url.rstrip('/')
         return f"{base}/{path.lstrip('/')}"
 
-    def _open(self, request: urllib.request.Request):
+    def _request(self, method: str, path: str, *, payload: Optional[dict] = None) -> dict:
+        url = self._url(path)
         try:
-            return self.opener.open(request)
-        except urllib.error.HTTPError as exc:
-            response_details = []
-            try:
-                body_bytes = exc.read()
-            except Exception:
-                body_bytes = b''
-            if body_bytes:
-                try:
-                    decoded = body_bytes.decode('utf-8', errors='replace')
-                except Exception:
-                    decoded = repr(body_bytes[:256])
-                decoded = " ".join(decoded.split())
-                if len(decoded) > 512:
-                    decoded = decoded[:509] + '...'
-                response_details.append(f"body={decoded}")
-            auth_header = getattr(exc, 'headers', None)
-            if auth_header and auth_header.get('WWW-Authenticate'):
-                response_details.append(
-                    f"www-authenticate={auth_header.get('WWW-Authenticate')}"
-                )
-            detail = f" ({'; '.join(response_details)})" if response_details else ''
+            response = self.session.request(
+                method,
+                url,
+                json=payload,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise PhotoprismAPIError(str(exc)) from exc
+
+        if response.status_code >= 400:
+            detail = response.text.strip()
+            if detail:
+                detail = " ".join(detail.split())
+                if len(detail) > 512:
+                    detail = detail[:509] + '...'
+                detail = f" ({detail})"
+            else:
+                detail = ''
             raise PhotoprismAPIError(
-                f"HTTP {exc.code} {exc.reason} for {exc.url}{detail}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise PhotoprismAPIError(str(exc.reason)) from exc
+                f"HTTP {response.status_code} {response.reason} for {url}{detail}"
+            )
+
+        if response.content:
+            try:
+                return response.json()
+            except ValueError:
+                pass
+        return {}
 
     def login(self) -> None:
         if self._logged_in:
@@ -291,17 +279,15 @@ class PhotoprismAPIClient:
         logger.debug(
             "PhotoprismAPI: logging in as %s", self.config.username or '<unknown>'
         )
-        payload = json.dumps(
-            {'username': self.config.username, 'password': self.config.password}
-        ).encode('utf-8')
-        request = urllib.request.Request(
-            self._url('/api/v1/session'),
-            data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST',
+        data = self._request(
+            'POST',
+            '/api/v1/session',
+            payload={'username': self.config.username, 'password': self.config.password},
         )
-        with self._open(request):
-            pass
+        token = data.get('access_token')
+        if not token:
+            raise PhotoprismAPIError('Photoprism API login failed: no access token')
+        self.session.headers.update({'Authorization': f'Bearer {token}'})
         self._logged_in = True
 
     def trigger_index(self, path: str, rescan: bool, cleanup: bool) -> None:
@@ -313,17 +299,11 @@ class PhotoprismAPIClient:
             rescan,
             cleanup,
         )
-        payload = json.dumps(
-            {'path': path, 'rescan': rescan, 'cleanup': cleanup}
-        ).encode('utf-8')
-        request = urllib.request.Request(
-            self._url('/api/v1/index'),
-            data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST',
+        self._request(
+            'POST',
+            '/api/v1/index',
+            payload={'path': path, 'rescan': rescan, 'cleanup': cleanup},
         )
-        with self._open(request):
-            pass
 
 
 def collect_photoprism_targets(
