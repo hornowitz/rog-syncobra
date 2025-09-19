@@ -53,6 +53,12 @@ To automatically install missing packages run:
   the absolute directory path, the path relative to the destination root, and the
   destination root respectively. Appending `_q` (for example `{path_q}`) inserts a
   shell-quoted version suitable for commands such as `kubectl exec`.
+- `--photoprism-api-base-url URL`, `--photoprism-api-username USER`,
+  `--photoprism-api-password PASS` – trigger indexing through the Photoprism REST
+  API instead of executing a local command. Optional flags `--photoprism-api-rescan`
+  and `--photoprism-api-cleanup` request a full rescan or cleanup cycle,
+  respectively. Use `--photoprism-api-insecure` to skip TLS verification when
+  working with self-signed certificates.
 
 ### Photoprism index examples
 
@@ -67,6 +73,15 @@ Run indexing inside a Kubernetes-managed Photoprism instance:
 ```bash
 ./rog-syncobra.py --photoprism-index-command \
   "kubectl exec --stdin --tty -n photoprism pod/photoprism-0 -- photoprism index -f -c {path_q}"
+```
+
+Use the REST API instead of a shell command:
+
+```bash
+./rog-syncobra.py \
+  --photoprism-api-base-url https://photos.example.com \
+  --photoprism-api-username admin \
+  --photoprism-api-password supersecret
 ```
 
 ## Systemd service
