@@ -6,7 +6,6 @@ import subprocess
 import logging
 import argparse
 import time
-import shlex
 import json
 import ssl
 import urllib.error
@@ -16,7 +15,7 @@ from http.cookiejar import CookieJar
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import xxrdfind
 
@@ -216,8 +215,6 @@ operation_tracker = OperationTracker()
 
 @dataclass(frozen=True)
 class PhotoprismTask:
-    mode: Literal['command', 'api']
-    command: str = ''
     path: str = ''
     rescan: bool = False
     cleanup: bool = False
@@ -368,26 +365,30 @@ def _parse_photoprism_task(raw: str) -> Optional[PhotoprismTask]:
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
-            return PhotoprismTask(mode='command', command=raw)
+            logger.debug(
+                "Ignoring legacy Photoprism command task entry: %s", raw
+            )
+            return None
         mode = payload.get('type')
-        if mode == 'api':
+        if mode in (None, 'api'):
             path = payload.get('path', '')
             rescan = bool(payload.get('rescan', False))
             cleanup = bool(payload.get('cleanup', False))
-            return PhotoprismTask(mode='api', path=path, rescan=rescan, cleanup=cleanup)
+            return PhotoprismTask(path=path, rescan=rescan, cleanup=cleanup)
         if mode == 'command':
             command = payload.get('command', '').strip()
             if command:
-                return PhotoprismTask(mode='command', command=command)
+                logger.debug(
+                    "Dropping legacy Photoprism command task: %s", command
+                )
             return None
     if raw.startswith('API|'):
-        return PhotoprismTask(mode='api', path=raw[4:])
-    return PhotoprismTask(mode='command', command=raw)
+        return PhotoprismTask(path=raw[4:])
+    logger.debug("Ignoring legacy Photoprism command task entry: %s", raw)
+    return None
 
 
 def _serialize_photoprism_task(task: PhotoprismTask) -> str:
-    if task.mode == 'command':
-        return task.command
     payload = {
         'type': 'api',
         'path': task.path,
@@ -408,27 +409,13 @@ def _dedupe_tasks(tasks: Sequence[PhotoprismTask]) -> list[PhotoprismTask]:
     return deduped
 
 
-def _dedupe_strings(values: Sequence[str]) -> list[str]:
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    return deduped
-
-
 def handle_photoprism_index(
-    command: str,
     dry_run: bool,
     changes_detected: bool,
     targets: Sequence[Path],
     library_root: Union[Path, None],
     api_config: Optional[PhotoprismAPIConfig],
 ) -> None:
-    command = command.strip() if command else ''
-    have_command = bool(command)
     have_api = bool(
         api_config
         and api_config.base_url
@@ -436,7 +423,7 @@ def handle_photoprism_index(
         and api_config.password
     )
 
-    if not have_command and not have_api:
+    if not have_api:
         return
 
     normalized_targets: list[Path] = []
@@ -449,112 +436,46 @@ def handle_photoprism_index(
         seen_paths.add(key)
         normalized_targets.append(normalized)
 
-    new_tasks: list[PhotoprismTask] = []
-
-    if have_command:
-        placeholder_tokens = (
-            '{path}',
-            '{relative}',
-            '{dest}',
-            '{path_q}',
-            '{relative_q}',
-            '{dest_q}',
-        )
-        uses_placeholders = any(token in command for token in placeholder_tokens)
-
-        if uses_placeholders:
-            commands_to_schedule: list[str] = []
-            dest_root_str = str(library_root) if library_root is not None else ''
-            dest_root_path = (
-                Path(os.path.abspath(dest_root_str)) if dest_root_str else None
-            )
-
-            def shell_quote(value: str) -> str:
-                return shlex.quote(value) if value else ''
-
-            for target in normalized_targets:
-                absolute = str(target)
-                relative = absolute
-                if dest_root_path is not None:
-                    try:
-                        relative = str(target.relative_to(dest_root_path))
-                    except ValueError:
-                        relative = absolute
-                replacements = {
-                    '{path}': absolute,
-                    '{relative}': relative,
-                    '{dest}': dest_root_str,
-                    '{path_q}': shell_quote(absolute),
-                    '{relative_q}': shell_quote(relative),
-                    '{dest_q}': shell_quote(dest_root_str),
-                }
-                formatted = command
-                for placeholder, value in replacements.items():
-                    formatted = formatted.replace(placeholder, value)
-                formatted = formatted.strip()
-                if formatted:
-                    commands_to_schedule.append(formatted)
-
-            commands_to_schedule = _dedupe_strings(commands_to_schedule)
-        else:
-            commands_to_schedule = [command]
-
-        for cmd in commands_to_schedule:
-            new_tasks.append(PhotoprismTask(mode='command', command=cmd))
-
-        if uses_placeholders and not commands_to_schedule and changes_detected:
-            logger.info(
-                'Photoprism index command configured but no target paths identified',
-            )
-
-    if have_api:
-        api_tasks: list[PhotoprismTask] = []
-        dest_root_path = Path(os.path.abspath(str(library_root))) if library_root else None
-        for target in normalized_targets:
-            path_value = ''
-            if dest_root_path is not None:
-                try:
-                    path_value = str(target.relative_to(dest_root_path))
-                except ValueError:
-                    path_value = str(target)
-            else:
+    dest_root_path = Path(os.path.abspath(str(library_root))) if library_root else None
+    api_tasks: list[PhotoprismTask] = []
+    for target in normalized_targets:
+        path_value = ''
+        if dest_root_path is not None:
+            try:
+                path_value = str(target.relative_to(dest_root_path))
+            except ValueError:
                 path_value = str(target)
-            path_value = path_value or '/'
-            api_tasks.append(
-                PhotoprismTask(
-                    mode='api',
-                    path=path_value,
-                    rescan=api_config.rescan,
-                    cleanup=api_config.cleanup,
-                )
+        else:
+            path_value = str(target)
+        path_value = path_value or '/'
+        api_tasks.append(
+            PhotoprismTask(
+                path=path_value,
+                rescan=api_config.rescan,
+                cleanup=api_config.cleanup,
             )
-        if not api_tasks:
-            api_tasks.append(
-                PhotoprismTask(
-                    mode='api',
-                    path='/',
-                    rescan=api_config.rescan,
-                    cleanup=api_config.cleanup,
-                )
-            )
-        new_tasks.extend(_dedupe_tasks(api_tasks))
+        )
 
+    if not api_tasks:
+        api_tasks.append(
+            PhotoprismTask(
+                path='/',
+                rescan=api_config.rescan,
+                cleanup=api_config.cleanup,
+            )
+        )
+
+    new_tasks = _dedupe_tasks(api_tasks)
     pending = load_pending_photoprism_tasks()
 
     if dry_run:
         if changes_detected:
             for task in new_tasks:
                 if task not in pending:
-                    if task.mode == 'command':
-                        logger.info(
-                            '[DRY] Would schedule Photoprism index command: %s',
-                            task.command,
-                        )
-                    else:
-                        logger.info(
-                            '[DRY] Would trigger Photoprism API index for: %s',
-                            task.path or '/',
-                        )
+                    logger.info(
+                        '[DRY] Would trigger Photoprism API index for: %s',
+                        task.path or '/',
+                    )
         return
 
     if changes_detected:
@@ -566,55 +487,30 @@ def handle_photoprism_index(
         return
 
     remaining = list(pending)
-    api_client: Optional[PhotoprismAPIClient] = None
+
+    try:
+        api_client = PhotoprismAPIClient(api_config)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            'Photoprism API client initialization failed (%s); will retry later',
+            exc,
+        )
+        return
 
     for idx, task in enumerate(pending):
-        if task.mode == 'command':
-            logger.info('Running Photoprism index command: %s', task.command)
-            try:
-                subprocess.run(task.command, shell=True, check=True)
-            except (subprocess.CalledProcessError, OSError) as exc:
-                logger.warning(
-                    'Photoprism index command failed (%s); will retry later',
-                    exc,
-                )
-                remaining = pending[idx:]
-                break
-            else:
-                logger.info('Photoprism index command completed successfully')
-                remaining = pending[idx + 1 :]
-        else:
-            if not have_api:
-                logger.warning(
-                    'Photoprism API task pending but API credentials/base URL not provided; will retry later',
-                )
-                remaining = pending[idx:]
-                break
-            if api_client is None:
-                try:
-                    api_client = PhotoprismAPIClient(api_config)
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning(
-                        'Photoprism API client initialization failed (%s); will retry later',
-                        exc,
-                    )
-                    remaining = pending[idx:]
-                    break
-            logger.info(
-                'Triggering Photoprism API index for: %s', task.path or '/'
+        logger.info('Triggering Photoprism API index for: %s', task.path or '/')
+        try:
+            api_client.trigger_index(task.path or '/', task.rescan, task.cleanup)
+        except PhotoprismAPIError as exc:
+            logger.warning(
+                'Photoprism API request failed (%s); will retry later',
+                exc,
             )
-            try:
-                api_client.trigger_index(task.path or '/', task.rescan, task.cleanup)
-            except PhotoprismAPIError as exc:
-                logger.warning(
-                    'Photoprism API request failed (%s); will retry later',
-                    exc,
-                )
-                remaining = pending[idx:]
-                break
-            else:
-                logger.info('Photoprism API index request accepted')
-                remaining = pending[idx + 1 :]
+            remaining = pending[idx:]
+            break
+        else:
+            logger.info('Photoprism API index request accepted')
+            remaining = pending[idx + 1 :]
 
     save_pending_photoprism_tasks(remaining)
 
@@ -684,27 +580,17 @@ def parse_args():
                    help="Run metadata dedupe on destination after processing completes")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
-    p.add_argument('--photoprism-index-command', default='',
-                   help=(
-                       "Shell command to trigger Photoprism indexing after files are processed. "
-                       "Use {path}, {relative}, and {dest} for the absolute directory path, the "
-                       "path relative to the destination root, and the destination root "
-                       "respectively. Append _q (for example {path_q}) to insert a shell-quoted "
-                       "version that is safe for commands such as kubectl exec. The command is "
-                       "executed via /bin/sh -c whenever changes occur, and failed runs are "
-                       "retried on the next invocation."
-                   ))
-    p.add_argument('--photoprism-api-base-url', default='',
+    p.add_argument('-B','--photoprism-api-base-url', default='',
                    help="Photoprism API base URL (e.g. https://photos.example.com)")
-    p.add_argument('--photoprism-api-username', default='',
+    p.add_argument('-U','--photoprism-api-username', default='',
                    help="Photoprism API username")
-    p.add_argument('--photoprism-api-password', default='',
+    p.add_argument('-P','--photoprism-api-password', default='',
                    help="Photoprism API password")
-    p.add_argument('--photoprism-api-rescan', action='store_true',
+    p.add_argument('-R','--photoprism-api-rescan', action='store_true',
                    help="Request a full rescan when triggering the Photoprism API")
-    p.add_argument('--photoprism-api-cleanup', action='store_true',
+    p.add_argument('-C','--photoprism-api-cleanup', action='store_true',
                    help="Ask Photoprism to run cleanup after indexing via the API")
-    p.add_argument('--photoprism-api-insecure', action='store_true',
+    p.add_argument('-T','--photoprism-api-insecure', action='store_true',
                    help="Disable TLS certificate verification for Photoprism API calls")
 
     # Use parse_known_args so we can gracefully ignore stray '-' arguments.
@@ -1287,7 +1173,6 @@ def pipeline(args):
             cleanup=args.photoprism_api_cleanup,
         )
     handle_photoprism_index(
-        args.photoprism_index_command,
         args.dry_run,
         changes_detected,
         photoprism_targets,
