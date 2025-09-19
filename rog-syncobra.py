@@ -162,6 +162,28 @@ class OperationTracker:
     def record_moved(self, src: Union[Path, str], dest: Union[Path, str]) -> None:
         self.moved.append((Path(src), Path(dest)))
 
+    def photoprism_target_directories(self) -> set[Path]:
+        """Return directories that should be re-indexed by Photoprism."""
+        targets: set[Path] = set()
+
+        for deleted_path in self.deleted:
+            path = Path(deleted_path)
+            candidate = path if not path.suffix else path.parent
+            if str(candidate):
+                targets.add(candidate)
+
+        for src, dest in self.moved:
+            src_parent = Path(src).parent
+            if str(src_parent):
+                targets.add(src_parent)
+
+            dest_path = Path(dest)
+            dest_candidate = dest_path if not dest_path.suffix else dest_path.parent
+            if str(dest_candidate):
+                targets.add(dest_candidate)
+
+        return targets
+
     def log_summary(self) -> None:
         if self.deleted:
             logger.info(
@@ -183,6 +205,31 @@ class OperationTracker:
 
 
 operation_tracker = OperationTracker()
+
+
+def collect_photoprism_targets(
+    tracker: OperationTracker,
+    library_root: Union[Path, str, None],
+    exif_changed: bool,
+) -> list[Path]:
+    targets: set[Path] = set()
+
+    for candidate in tracker.photoprism_target_directories():
+        try:
+            resolved = Path(os.path.abspath(str(candidate)))
+        except OSError:
+            continue
+        targets.add(resolved)
+
+    if exif_changed and library_root is not None:
+        try:
+            root_path = Path(os.path.abspath(str(library_root)))
+        except OSError:
+            root_path = None
+        else:
+            targets.add(root_path)
+
+    return sorted(targets, key=lambda p: str(p))
 
 
 def load_pending_photoprism_commands() -> list[str]:
@@ -222,7 +269,13 @@ def save_pending_photoprism_commands(commands: list[str]) -> None:
         )
 
 
-def handle_photoprism_index(command: str, dry_run: bool, changes_detected: bool) -> None:
+def handle_photoprism_index(
+    command: str,
+    dry_run: bool,
+    changes_detected: bool,
+    targets: Sequence[Path],
+    library_root: Union[Path, None],
+) -> None:
     if not command:
         return
 
@@ -230,21 +283,77 @@ def handle_photoprism_index(command: str, dry_run: bool, changes_detected: bool)
     if not command:
         return
 
-    if dry_run:
-        if changes_detected:
-            logger.info(
-                "[DRY] Would schedule Photoprism index command: %s",
-                command,
-            )
-        else:
-            logger.info("[DRY] Photoprism index command configured but no changes detected")
-        return
+    normalized_targets: list[Path] = []
+    seen_paths: set[str] = set()
+    for target in targets:
+        normalized = Path(os.path.abspath(str(target)))
+        key = str(normalized)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        normalized_targets.append(normalized)
+
+    placeholder_tokens = ('{path}', '{relative}', '{dest}')
+    uses_placeholders = any(token in command for token in placeholder_tokens)
+
+    if uses_placeholders:
+        commands_to_schedule: list[str] = []
+        dest_root_str = str(library_root) if library_root is not None else ''
+        dest_root_path = (
+            Path(os.path.abspath(dest_root_str)) if dest_root_str else None
+        )
+        for target in normalized_targets:
+            absolute = str(target)
+            relative = absolute
+            if dest_root_path is not None:
+                try:
+                    relative = str(target.relative_to(dest_root_path))
+                except ValueError:
+                    relative = absolute
+            formatted = command
+            formatted = formatted.replace('{path}', absolute)
+            formatted = formatted.replace('{relative}', relative)
+            formatted = formatted.replace('{dest}', dest_root_str)
+            formatted = formatted.strip()
+            if formatted:
+                commands_to_schedule.append(formatted)
+
+        deduped: list[str] = []
+        seen_cmds: set[str] = set()
+        for cmd in commands_to_schedule:
+            if cmd in seen_cmds:
+                continue
+            seen_cmds.add(cmd)
+            deduped.append(cmd)
+        commands_to_schedule = deduped
+    else:
+        commands_to_schedule = [command]
 
     pending = load_pending_photoprism_commands()
 
-    if changes_detected and command not in pending:
-        pending.append(command)
-        save_pending_photoprism_commands(pending)
+    if dry_run:
+        if changes_detected:
+            if commands_to_schedule:
+                for cmd in commands_to_schedule:
+                    if cmd not in pending:
+                        logger.info(
+                            "[DRY] Would schedule Photoprism index command: %s",
+                            cmd,
+                        )
+            else:
+                logger.info(
+                    "[DRY] Photoprism index command configured but no target paths identified"
+                )
+        return
+
+    if changes_detected and commands_to_schedule:
+        for cmd in commands_to_schedule:
+            if cmd not in pending:
+                pending.append(cmd)
+    elif changes_detected and uses_placeholders and not commands_to_schedule:
+        logger.info(
+            "Photoprism index command configured but no target paths identified"
+        )
 
     if not pending:
         return
@@ -337,8 +446,10 @@ def parse_args():
     p.add_argument('--photoprism-index-command', default='',
                    help=(
                        "Shell command to trigger Photoprism indexing after files are processed. "
-                       "The command is executed via /bin/sh -c whenever changes occur, and "
-                       "failed runs are retried on the next invocation."
+                       "Use {path} for the absolute path of a changed directory, {relative} for "
+                       "the path relative to the destination root, and {dest} for the full "
+                       "destination root. The command is executed via /bin/sh -c whenever "
+                       "changes occur, and failed runs are retried on the next invocation."
                    ))
 
     # Use parse_known_args so we can gracefully ignore stray '-' arguments.
@@ -901,11 +1012,21 @@ def pipeline(args):
 
     operation_tracker.log_summary()
 
-    changes_detected = bool(exif_changed or operation_tracker.deleted or operation_tracker.moved)
+    changes_detected = bool(
+        exif_changed or operation_tracker.deleted or operation_tracker.moved
+    )
+    library_root = Path(dest_abs if dest_is_distinct else src_abs)
+    photoprism_targets = collect_photoprism_targets(
+        operation_tracker,
+        library_root,
+        exif_changed,
+    )
     handle_photoprism_index(
         args.photoprism_index_command,
         args.dry_run,
         changes_detected,
+        photoprism_targets,
+        library_root,
     )
 
 def main():
