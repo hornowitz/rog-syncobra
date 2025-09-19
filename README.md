@@ -41,6 +41,7 @@ To automatically install missing packages run:
 - `-g, --grace SECONDS` – seconds to wait after `close_write` (default: 300)
 - `--archive-dir DIR` – directory to archive old files to
 - `--archive-years YEARS` – move directories older than this many years (default: 2)
+- `--skip-marker NAME` – skip directories that contain `NAME` (default: `.rog-syncobraignore`; set to an empty string to disable)
 - `--install-deps` – install required system packages and exit
 
 ## Systemd service
