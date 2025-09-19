@@ -171,9 +171,9 @@ def parse_args():
     p.add_argument('-d','--ddwometadata', action='store_true',
                    help="Raw dedupe by data (XXH64) between source & dest")
     p.add_argument('-D','--deldupi', action='store_true',
-                   help="Metadata dedupe by xxhash rdfind-like scanner on source")
+                   help="Force metadata dedupe on source (now enabled by default)")
     p.add_argument('-X','--dedupsourceanddest', action='store_true',
-                   help="Metadata dedupe by xxhash rdfind-like scanner on source, then against destination")
+                   help="Force metadata dedupe on source and destination pre-move (now default when destination specified)")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
@@ -200,6 +200,8 @@ def parse_args():
                    help="Move directories older than this many years (default 2)")
     p.add_argument('--skip-marker', default='.rog-syncobraignore',
                    help="Filename that marks directories to skip (set to '' to disable)")
+    p.add_argument('--dedup-destination-final', action='store_true',
+                   help="Run metadata dedupe on destination after processing completes")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
 
@@ -730,19 +732,18 @@ def pipeline(args):
     dest = (args.move2targetdir or src).rstrip('/')
     src_abs = os.path.abspath(src)
     dest_abs = os.path.abspath(dest)
+    dest_specified = bool(args.move2targetdir)
+    dest_is_distinct = dest_specified and dest_abs != src_abs
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
-    ran_source_dedupe = False
-    if args.deldupi:
-        metadata_dedupe(src, args.dry_run)
-        ran_source_dedupe = True
-    if args.dedupsourceanddest:
-        if not ran_source_dedupe:
-            metadata_dedupe(src, args.dry_run)
-            ran_source_dedupe = True
-        if dest_abs != src_abs:
-            metadata_dedupe_source_against_dest(src, dest, args.dry_run)
+    # Always dedupe the source first to ensure we work with a clean input set.
+    metadata_dedupe(src, args.dry_run)
+
+    # When a distinct destination is provided (or explicitly requested),
+    # also dedupe source against destination by default.
+    if (dest_is_distinct or args.dedupsourceanddest) and dest_abs != src_abs:
+        metadata_dedupe_source_against_dest(src, dest, args.dry_run)
     if args.ddwometadata:
         raw_dedupe(src, dest, args.dry_run)
     exif_sort(src, dest, args)
@@ -751,6 +752,9 @@ def pipeline(args):
                     args.archive_dir,
                     args.archive_years,
                     args.dry_run)
+
+    if args.dedup_destination_final and dest_is_distinct:
+        metadata_dedupe(dest, args.dry_run)
 
 def main():
     args = parse_args()

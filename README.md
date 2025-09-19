@@ -26,10 +26,10 @@ To automatically install missing packages run:
 
 - `-r, --recursive` – recurse into subdirectories
 - `-d, --ddwometadata` – raw dedupe by XXH64 between source and destination
-- `-D, --deldupi` – metadata dedupe by bundled xxhash scanner on source (runs before
-  `--ddwometadata` so the lighter metadata pass can remove duplicates before the
-  raw scan)
-- `-X, --dedupsourceanddest` – metadata dedupe on source, then compare against destination
+- `-D, --deldupi` – force metadata dedupe on source (runs before `--ddwometadata`; now
+  enabled by default)
+- `-X, --dedupsourceanddest` – force metadata dedupe on source and compare against the
+  destination before moving files (now the default when a destination is provided)
 - `-y, --year-month-sort` – sort into `Year/Month` directories (default on)
 - `-Y, --check-year-mount` – verify that the current year's folder under the
   destination exists and is a mountpoint
@@ -44,6 +44,8 @@ To automatically install missing packages run:
 - `--archive-dir DIR` – directory to archive old files to
 - `--archive-years YEARS` – move directories older than this many years (default: 2)
 - `--skip-marker NAME` – skip directories that contain `NAME` (default: `.rog-syncobraignore`; set to an empty string to disable)
+- `--dedup-destination-final` – run metadata dedupe on the destination after the
+  pipeline finishes moving files
 - `--install-deps` – install required system packages and exit
 
 ## Systemd service
