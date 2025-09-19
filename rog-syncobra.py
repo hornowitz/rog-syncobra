@@ -402,9 +402,15 @@ def exif_sort(src, dest, args):
             buckets[idx % worker_count].append(target)
         return [bucket for bucket in buckets if bucket]
 
-    def run_worker(worker_targets):
+    def run_worker(worker_id, worker_targets):
         if not worker_targets:
+            logger.debug(f"Worker {worker_id} received no targets; skipping")
             return
+        logger.info(
+            "Worker %s starting with %d target(s)",
+            worker_id,
+            len(worker_targets),
+        )
         proc = subprocess.Popen(
             ['exiftool', '-stay_open', 'True', '-@', '-'],
             stdin=subprocess.PIPE,
@@ -420,7 +426,7 @@ def exif_sort(src, dest, args):
                 if not current_targets:
                     continue
                 full_cmd = [*cmd, *current_targets]
-                logger.info(" ".join(full_cmd))
+                logger.info("[worker %s] %s", worker_id, " ".join(full_cmd))
                 proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
                 proc.stdin.flush()
 
@@ -432,15 +438,16 @@ def exif_sort(src, dest, args):
                     if line == '{ready}':
                         break
                     if line.lower().startswith('error'):
-                        logger.error(line)
+                        logger.error("[worker %s] %s", worker_id, line)
                     elif 'warning' in line.lower():
-                        logger.warning(line)
+                        logger.warning("[worker %s] %s", worker_id, line)
                     elif line:
-                        logger.info(line)
+                        logger.info("[worker %s] %s", worker_id, line)
         finally:
             proc.stdin.write("-stay_open\nFalse\n")
             proc.stdin.flush()
             proc.communicate()
+            logger.info("Worker %s finished", worker_id)
 
     heic_desc = describe_extensions(HEIC_EXTS)
     if heic_present:
@@ -614,10 +621,13 @@ def exif_sort(src, dest, args):
         target_chunks = split_targets(targets, worker_count)
 
         if len(target_chunks) == 1:
-            run_worker(target_chunks[0])
+            run_worker(1, target_chunks[0])
         else:
             with ThreadPoolExecutor(len(target_chunks)) as executor:
-                futures = [executor.submit(run_worker, chunk) for chunk in target_chunks]
+                futures = [
+                    executor.submit(run_worker, idx + 1, chunk)
+                    for idx, chunk in enumerate(target_chunks)
+                ]
                 for future in futures:
                     future.result()
     finally:
