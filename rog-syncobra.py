@@ -6,7 +6,6 @@ import subprocess
 import logging
 import argparse
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 HEIC_EXTS = {'.heic', '.heif'}
@@ -29,9 +28,6 @@ MEDIA_SCAN_EXTS = (
     | ANDROID_VIDEO_EXTS
     | DCIM_EXTS
 )
-
-DEFAULT_EXIFTOOL_WORKERS = max(1, min(4, os.cpu_count() or 1))
-
 
 def normalize_extensions(exts):
     if not exts:
@@ -190,8 +186,6 @@ def parse_args():
                    help="Show actions without executing")
     p.add_argument('--debug', action='store_true',
                    help="Verbose exiftool (-v); default is quiet (-q)")
-    p.add_argument('--exiftool-workers', type=int, default=DEFAULT_EXIFTOOL_WORKERS,
-                   help=f"Number of parallel exiftool workers to use (default: {DEFAULT_EXIFTOOL_WORKERS})")
     p.add_argument('-W','--watch', action='store_true',
                    help="Watch mode: monitor for CLOSE_WRITE events")
     p.add_argument('-I','--inputdir', default=os.getcwd(),
@@ -218,8 +212,6 @@ def parse_args():
     extra = [e for e in extra if e != '-']
     if extra:
         p.error(f"unrecognized arguments: {' '.join(extra)}")
-    if args.exiftool_workers < 1:
-        p.error("--exiftool-workers must be >= 1")
     return args
 
 def safe_run(cmd, dry_run=False):
@@ -417,14 +409,6 @@ def exif_sort(src, dest, args):
 
     def queue(cmd, extra_targets=None):
         jobs.append((list(cmd), list(extra_targets) if extra_targets is not None else None))
-
-    def split_targets(target_list, worker_count):
-        if worker_count <= 1 or len(target_list) <= 1:
-            return [list(target_list)]
-        buckets = [[] for _ in range(worker_count)]
-        for idx, target in enumerate(target_list):
-            buckets[idx % worker_count].append(target)
-        return [bucket for bucket in buckets if bucket]
 
     def run_worker(worker_id, worker_targets):
         if not worker_targets:
@@ -650,19 +634,7 @@ def exif_sort(src, dest, args):
         if not jobs:
             return
 
-        worker_count = min(args.exiftool_workers, max(1, len(targets)))
-        target_chunks = split_targets(targets, worker_count)
-
-        if len(target_chunks) == 1:
-            run_worker(1, target_chunks[0])
-        else:
-            with ThreadPoolExecutor(len(target_chunks)) as executor:
-                futures = [
-                    executor.submit(run_worker, idx + 1, chunk)
-                    for idx, chunk in enumerate(target_chunks)
-                ]
-                for future in futures:
-                    future.result()
+        run_worker(1, targets)
     finally:
         os.chdir(cwd)
 
