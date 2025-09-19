@@ -26,6 +26,7 @@ import logging
 from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 import os
 import subprocess
 import json
@@ -36,6 +37,16 @@ from tqdm import tqdm
 CHUNK_SIZE = 1 << 20  # 1 MB
 
 logger = logging.getLogger("xxrdfind")
+
+
+@dataclass
+class DuplicateSummary:
+    deleted: list[Path] = field(default_factory=list)
+    would_delete: list[Path] = field(default_factory=list)
+
+
+def _format_paths(paths: list[Path]) -> str:
+    return ", ".join(str(p) for p in paths)
 
 
 def _cache_file(root: Path, strip_metadata: bool) -> Path:
@@ -111,7 +122,9 @@ def iter_files(paths, recursive: bool = True):
 
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True,
                     strip_metadata=False, recursive: bool = True, use_cache: bool = True,
-                    delete_roots: list[Path] | None = None):
+                    delete_roots: list[Path] | None = None,
+                    summary: DuplicateSummary | None = None) -> DuplicateSummary:
+    summary = summary or DuplicateSummary()
     raw_files = list(iter_files(paths, recursive))
     logger.debug("Found %d files to process", len(raw_files))
     cache_map: dict[Path, dict] = {}
@@ -261,12 +274,14 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                     for f in candidates:
                         if dry_run:
                             logger.info("Would delete %s", f)
+                            summary.would_delete.append(f)
                         else:
                             current_digest = file_hash(f, strip_metadata, 'blake2b')[1]
                             if current_digest == strong_digest:
                                 try:
                                     f.unlink()
                                     logger.info("Deleted %s", f)
+                                    summary.deleted.append(f)
                                 except FileNotFoundError:
                                     logger.warning("Skipped deletion for %s: file missing", f)
                                 except OSError as e:
@@ -279,6 +294,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         if use_cache:
             for root, cache in cache_map.items():
                 save_cache(root, cache, strip_metadata)
+
+    return summary
 
 
 def main():
@@ -306,14 +323,34 @@ def main():
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
                         format='%(levelname)s: %(message)s')
 
+    summary: DuplicateSummary | None = None
     try:
-        find_duplicates(args.paths, delete=args.delete, dry_run=args.dry_run,
-                        threads=args.threads, show_progress=not args.no_progress,
-                        strip_metadata=args.strip_metadata, recursive=args.recursive,
-                        use_cache=args.cache,
-                        delete_roots=[Path(p) for p in args.delete_within] if args.delete_within else None)
+        summary = find_duplicates(
+            args.paths,
+            delete=args.delete,
+            dry_run=args.dry_run,
+            threads=args.threads,
+            show_progress=not args.no_progress,
+            strip_metadata=args.strip_metadata,
+            recursive=args.recursive,
+            use_cache=args.cache,
+            delete_roots=[Path(p) for p in args.delete_within] if args.delete_within else None,
+        )
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
+    if summary is not None:
+        if summary.deleted:
+            logger.info("Deleted files (%d): %s", len(summary.deleted), _format_paths(summary.deleted))
+        else:
+            logger.info("Deleted files: none")
+        if summary.would_delete:
+            logger.info(
+                "Files that would be deleted in dry-run (%d): %s",
+                len(summary.would_delete),
+                _format_paths(summary.would_delete),
+            )
+        elif args.dry_run:
+            logger.info("Files that would be deleted in dry-run: none")
 
 
 if __name__ == '__main__':
