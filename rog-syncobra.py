@@ -454,9 +454,16 @@ def handle_photoprism_index(
         path_value = ''
         if dest_root_path is not None:
             try:
-                path_value = str(target.relative_to(dest_root_path))
+                relative = target.relative_to(dest_root_path)
             except ValueError:
-                path_value = str(target)
+                logger.debug(
+                    "Skipping Photoprism target outside library root: %s",
+                    target,
+                )
+                continue
+            path_value = str(relative)
+            if path_value == '.':
+                path_value = ''
         else:
             path_value = str(target)
         path_value = path_value or '/'
