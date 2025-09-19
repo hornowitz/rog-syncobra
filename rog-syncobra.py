@@ -6,6 +6,7 @@ import subprocess
 import logging
 import argparse
 import time
+import shlex
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -293,7 +294,14 @@ def handle_photoprism_index(
         seen_paths.add(key)
         normalized_targets.append(normalized)
 
-    placeholder_tokens = ('{path}', '{relative}', '{dest}')
+    placeholder_tokens = (
+        '{path}',
+        '{relative}',
+        '{dest}',
+        '{path_q}',
+        '{relative_q}',
+        '{dest_q}',
+    )
     uses_placeholders = any(token in command for token in placeholder_tokens)
 
     if uses_placeholders:
@@ -302,6 +310,9 @@ def handle_photoprism_index(
         dest_root_path = (
             Path(os.path.abspath(dest_root_str)) if dest_root_str else None
         )
+        def shell_quote(value: str) -> str:
+            return shlex.quote(value) if value else ''
+
         for target in normalized_targets:
             absolute = str(target)
             relative = absolute
@@ -310,10 +321,17 @@ def handle_photoprism_index(
                     relative = str(target.relative_to(dest_root_path))
                 except ValueError:
                     relative = absolute
+            replacements = {
+                '{path}': absolute,
+                '{relative}': relative,
+                '{dest}': dest_root_str,
+                '{path_q}': shell_quote(absolute),
+                '{relative_q}': shell_quote(relative),
+                '{dest_q}': shell_quote(dest_root_str),
+            }
             formatted = command
-            formatted = formatted.replace('{path}', absolute)
-            formatted = formatted.replace('{relative}', relative)
-            formatted = formatted.replace('{dest}', dest_root_str)
+            for placeholder, value in replacements.items():
+                formatted = formatted.replace(placeholder, value)
             formatted = formatted.strip()
             if formatted:
                 commands_to_schedule.append(formatted)
@@ -446,10 +464,12 @@ def parse_args():
     p.add_argument('--photoprism-index-command', default='',
                    help=(
                        "Shell command to trigger Photoprism indexing after files are processed. "
-                       "Use {path} for the absolute path of a changed directory, {relative} for "
-                       "the path relative to the destination root, and {dest} for the full "
-                       "destination root. The command is executed via /bin/sh -c whenever "
-                       "changes occur, and failed runs are retried on the next invocation."
+                       "Use {path}, {relative}, and {dest} for the absolute directory path, the "
+                       "path relative to the destination root, and the destination root "
+                       "respectively. Append _q (for example {path_q}) to insert a shell-quoted "
+                       "version that is safe for commands such as kubectl exec. The command is "
+                       "executed via /bin/sh -c whenever changes occur, and failed runs are "
+                       "retried on the next invocation."
                    ))
 
     # Use parse_known_args so we can gracefully ignore stray '-' arguments.
