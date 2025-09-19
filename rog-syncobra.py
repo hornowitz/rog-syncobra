@@ -573,6 +573,15 @@ def exif_sort(src, dest, args):
             cmd = [
                 'exiftool', vflag,
                 '-if','$Keywords=~/whatsapp/i',
+                '-if','not defined $CreateDate',
+                '-CreateDate<FileModifyDate',
+                '-overwrite_original_in_place','-P','-fast2',
+                '-ext+','JPG','-ext+','MP4','-ext+','3GP'
+            ]
+            queue(cmd)
+            cmd = [
+                'exiftool', vflag,
+                '-if','$Keywords=~/whatsapp/i',
                 '-FileName<${CreateDate} ${Keywords}%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','JPG','-ext+','MP4','-ext+','3GP'
