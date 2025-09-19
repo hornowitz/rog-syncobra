@@ -6,7 +6,12 @@ import subprocess
 import logging
 import argparse
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+from typing import Sequence, Tuple, Union
+
+import xxrdfind
 
 HEIC_EXTS = {'.heic', '.heif'}
 SCREENSHOT_EXTS = {'.png', '.jpg', '.jpeg', '.heic', '.heif', '.webp'}
@@ -135,6 +140,48 @@ try:
 except Exception:
     pass
 # ────────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class OperationTracker:
+    deleted: list[Path] = field(default_factory=list)
+    moved: list[Tuple[Path, Path]] = field(default_factory=list)
+
+    def reset(self) -> None:
+        self.deleted.clear()
+        self.moved.clear()
+
+    def record_deleted(self, paths: Sequence[Union[Path, str]]) -> None:
+        for path in paths:
+            if path is None:
+                continue
+            self.deleted.append(Path(path))
+
+    def record_moved(self, src: Union[Path, str], dest: Union[Path, str]) -> None:
+        self.moved.append((Path(src), Path(dest)))
+
+    def log_summary(self) -> None:
+        if self.deleted:
+            logger.info(
+                "Deleted files (%d): %s",
+                len(self.deleted),
+                ", ".join(str(p) for p in self.deleted),
+            )
+        else:
+            logger.info("Deleted files: none")
+
+        if self.moved:
+            logger.info(
+                "Moved files (%d): %s",
+                len(self.moved),
+                ", ".join(f"{src} → {dest}" for src, dest in self.moved),
+            )
+        else:
+            logger.info("Moved files: none")
+
+
+operation_tracker = OperationTracker()
+
 
 def check_program(name):
     if not shutil.which(name):
@@ -265,20 +312,30 @@ def check_year_mount(dest):
     logger.info(f"Verified mountpoint for {year_dir}")
 
 def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=None):
-    script = os.path.join(os.path.dirname(__file__), 'xxrdfind.py')
-    cmd = [sys.executable, script, '--delete', *paths]
+    path_strings = [str(p) for p in paths]
+    details = []
     if strip_metadata:
-        cmd.append('--strip-metadata')
-    if dry_run:
-        cmd.append('--dry-run')
-    if delete_within:
-        for root in delete_within:
-            cmd.extend(['--delete-within', root])
-    logger.info(f"xxrdfind dedupe: {' '.join(cmd)}")
+        details.append('strip_metadata')
+    delete_within_strings = [str(root) for root in delete_within] if delete_within else []
+    if delete_within_strings:
+        details.append(f"delete_within={', '.join(delete_within_strings)}")
+    detail_str = f" ({'; '.join(details)})" if details else ''
+    logger.info("xxrdfind dedupe: %s%s", " ".join(path_strings), detail_str)
     if dry_run:
         logger.info("Dry run: skipping xxrdfind execution")
-        return
-    safe_run(cmd, False)
+        return xxrdfind.DuplicateSummary()
+
+    delete_roots = [Path(root) for root in delete_within_strings] if delete_within_strings else None
+    summary = xxrdfind.find_duplicates(
+        [Path(p) for p in path_strings],
+        delete=True,
+        dry_run=dry_run,
+        show_progress=False,
+        strip_metadata=strip_metadata,
+        delete_roots=delete_roots,
+    )
+    operation_tracker.record_deleted(summary.deleted)
+    return summary
 
 
 def metadata_dedupe(path, dry_run=False):
@@ -434,7 +491,7 @@ def exif_sort(src, dest, args):
                 if not current_targets:
                     continue
                 full_cmd = [*cmd, *current_targets]
-                logger.info("[worker %s] %s", worker_id, " ".join(full_cmd))
+                logger.info("Worker %s: %s", worker_id, " ".join(full_cmd))
                 proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
                 proc.stdin.flush()
 
@@ -446,11 +503,11 @@ def exif_sort(src, dest, args):
                     if line == '{ready}':
                         break
                     if line.lower().startswith('error'):
-                        logger.error("[worker %s] %s", worker_id, line)
+                        logger.error("Worker %s: %s", worker_id, line)
                     elif 'warning' in line.lower():
-                        logger.warning("[worker %s] %s", worker_id, line)
+                        logger.warning("Worker %s: %s", worker_id, line)
                     elif line:
-                        logger.info("[worker %s] %s", worker_id, line)
+                        logger.info("Worker %s: %s", worker_id, line)
         finally:
             proc.stdin.write("-stay_open\nFalse\n")
             proc.stdin.flush()
@@ -709,6 +766,7 @@ def archive_old(src, archive_dir, years, dry_run=False):
         else:
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             shutil.move(src_path, dest_path)
+            operation_tracker.record_moved(Path(src_path), Path(dest_path))
             logger.info(f"Archived: {src_path} → {dest_path}")
 
 
@@ -719,6 +777,7 @@ def pipeline(args):
     dest_abs = os.path.abspath(dest)
     dest_specified = bool(args.move2targetdir)
     dest_is_distinct = dest_specified and dest_abs != src_abs
+    operation_tracker.reset()
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
@@ -744,6 +803,8 @@ def pipeline(args):
 
     if args.dedup_destination_final and dest_is_distinct:
         metadata_dedupe(dest, args.dry_run)
+
+    operation_tracker.log_summary()
 
 def main():
     args = parse_args()
