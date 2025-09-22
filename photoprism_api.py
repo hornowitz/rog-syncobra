@@ -63,6 +63,13 @@ class PhotoprismAPIClient:
 
     def _request(self, method: str, path: str, *, payload: Optional[dict] = None) -> dict:
         url = self._url(path)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "PhotoprismAPI: preparing %s %s payload=%s",
+                method,
+                url,
+                json.dumps(payload, sort_keys=True) if payload is not None else '{}',
+            )
         try:
             response = self.session.request(
                 method,
@@ -453,6 +460,13 @@ def handle_photoprism_index(
 
     new_tasks = _dedupe_tasks(api_tasks)
     pending = load_pending_photoprism_tasks()
+
+    if logger.isEnabledFor(logging.DEBUG):
+        for task in new_tasks:
+            logger.debug(
+                'PhotoprismAPI: queued task payload=%s',
+                _serialize_photoprism_task(task),
+            )
 
     if dest_root_path is not None and pending:
         filtered: list[PhotoprismTask] = []
