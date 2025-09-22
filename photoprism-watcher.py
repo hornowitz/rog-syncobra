@@ -227,6 +227,14 @@ def collect_target(path_str: str, *, library_root: Path, logger: logging.Logger)
             library_root,
         )
         return None
+    try:
+        relative_parts = resolved.relative_to(library_root).parts
+    except ValueError:  # pragma: no cover - defensive
+        return resolved
+
+    if len(relative_parts) >= 3 and relative_parts[0] == 'aktuell':
+        resolved = library_root.joinpath(*relative_parts[:3])
+
     return resolved
 
 
