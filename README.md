@@ -106,6 +106,10 @@ Additional flags mirror the Photoprism options available in `rog-syncobra.py`:
   300 seconds).
 - `--photoprism-api-strip-prefix PREFIX` removes mount-point prefixes from
   paths submitted to the API (may be supplied multiple times).
+- Supply watch directories as `PATH=PREFIX` to override the path that is
+  submitted to Photoprism. Only the final directory component from `PATH` is
+  appended to `PREFIX`, allowing setups such as
+  `--watch /library/aktuell/2025/09=aktuell/2025`.
 
 The watcher writes detailed logs to `/var/log/rog-syncobra/photoprism-watcher.log`.
 
