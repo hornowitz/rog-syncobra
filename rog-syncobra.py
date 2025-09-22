@@ -213,6 +213,7 @@ def collect_photoprism_targets(
     tracker: OperationTracker,
     library_root: Union[Path, str, None],
     exif_changed: bool,
+    exif_reference_time: Optional[float] = None,
 ) -> list[Path]:
     targets: set[Path] = set()
 
@@ -229,7 +230,48 @@ def collect_photoprism_targets(
         except OSError:
             root_path = None
         else:
-            targets.add(root_path)
+            if exif_reference_time is None:
+                targets.add(root_path)
+            else:
+                cutoff = max(0.0, exif_reference_time - 1.0)
+                month_dirs: set[Path] = set()
+                try:
+                    for year_dir in root_path.iterdir():
+                        try:
+                            if not year_dir.is_dir():
+                                continue
+                        except OSError:
+                            continue
+                        if not year_dir.name.isdigit():
+                            continue
+                        for month_dir in year_dir.iterdir():
+                            try:
+                                if not month_dir.is_dir():
+                                    continue
+                            except OSError:
+                                continue
+                            if not month_dir.name.isdigit():
+                                continue
+                            try:
+                                mtime = month_dir.stat().st_mtime
+                            except OSError:
+                                continue
+                            if mtime < cutoff:
+                                continue
+                            try:
+                                resolved = Path(
+                                    _expand_path(str(month_dir))
+                                )
+                            except OSError:
+                                continue
+                            month_dirs.add(resolved)
+                except OSError:
+                    month_dirs = set()
+
+                if month_dirs:
+                    targets.update(month_dirs)
+                else:
+                    targets.add(root_path)
 
     return sorted(targets, key=lambda p: str(p))
 
@@ -935,6 +977,7 @@ def pipeline(args):
         metadata_dedupe_source_against_dest(src, dest, args.dry_run)
     if args.ddwometadata:
         raw_dedupe(src, dest, args.dry_run)
+    exif_reference_time = time.time()
     exif_changed = exif_sort(src, dest, args)
     if args.archive_dir:
         archive_old(dest if args.move2targetdir else src,
@@ -956,6 +999,7 @@ def pipeline(args):
         operation_tracker,
         library_root,
         exif_changed,
+        exif_reference_time,
     )
     api_config = None
     base_url = args.photoprism_api_base_url.strip()
