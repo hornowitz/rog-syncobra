@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -18,6 +19,21 @@ from photoprism_api import PhotoprismAPIConfig, handle_photoprism_index
 
 
 LOGFILE = '/var/log/rog-syncobra/photoprism-watcher.log'
+
+
+@dataclass(frozen=True)
+class WatchConfig:
+    """Configuration describing a directory that should be watched."""
+
+    path: Path
+    index_prefix_parts: tuple[str, ...] | None
+
+    def index_target(self, library_root: Path) -> Path:
+        """Return the Photoprism target path for this watch configuration."""
+
+        if self.index_prefix_parts:
+            return library_root.joinpath(*self.index_prefix_parts, self.path.name)
+        return self.path
 
 
 def _expand_path(path: str | Path) -> Path:
@@ -63,6 +79,38 @@ def setup_logging() -> logging.Logger:
     return logger
 
 
+def _parse_watch_argument(
+    value: str, parser: argparse.ArgumentParser
+) -> tuple[str, tuple[str, ...] | None]:
+    if '=' in value:
+        path_str, prefix = value.split('=', 1)
+        prefix = prefix.strip()
+    else:
+        path_str, prefix = value, None
+
+    if prefix:
+        prefix = prefix.strip('/ ')
+        if not prefix:
+            prefix = None
+
+    if not prefix:
+        return path_str, None
+
+    prefix_path = Path(prefix)
+    if prefix_path.is_absolute():
+        parser.error('index prefix must be a relative path')
+
+    parts: list[str] = []
+    for part in prefix_path.parts:
+        if part in ('', '.'):
+            continue
+        if part == '..':
+            parser.error('index prefix must not contain ".." segments')
+        parts.append(part)
+
+    return path_str, tuple(parts)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Watch directories and reindex them via the Photoprism REST API',
@@ -73,7 +121,10 @@ def parse_args() -> argparse.Namespace:
         metavar='DIR',
         action='append',
         required=True,
-        help='Directory to monitor for changes (may be specified multiple times)',
+        help=(
+            'Directory to monitor for changes; append =PREFIX to override the '
+            'target path reported to Photoprism. May be specified multiple times.'
+        ),
     )
     parser.add_argument(
         '--library-root',
@@ -141,6 +192,15 @@ def parse_args() -> argparse.Namespace:
 
     args = parser.parse_args()
 
+    watch_configs: list[WatchConfig] = []
+    for raw_value in args.watch_dirs:
+        path_str, prefix_parts = _parse_watch_argument(raw_value, parser)
+        watch_configs.append(
+            WatchConfig(path=_expand_path(path_str), index_prefix_parts=prefix_parts)
+        )
+
+    args.watch_configs = watch_configs
+
     if args.grace < 0:
         parser.error('--grace must be non-negative')
 
@@ -207,7 +267,14 @@ def trigger_index(
     )
 
 
-def collect_target(path_str: str, *, library_root: Path, logger: logging.Logger) -> Path | None:
+def collect_target(
+    path_str: str,
+    *,
+    library_root: Path,
+    watch_paths: list[Path],
+    prefix_targets: dict[Path, Path],
+    logger: logging.Logger,
+) -> Path | None:
     candidate = Path(path_str)
     if not candidate.exists():
         candidate = candidate.parent
@@ -227,6 +294,15 @@ def collect_target(path_str: str, *, library_root: Path, logger: logging.Logger)
             library_root,
         )
         return None
+
+    matched_watch: Path | None = None
+    for watch_path in watch_paths:
+        if resolved == watch_path or resolved.is_relative_to(watch_path):
+            matched_watch = watch_path
+            break
+
+    if matched_watch is not None and matched_watch in prefix_targets:
+        return prefix_targets[matched_watch]
     try:
         relative_parts = resolved.relative_to(library_root).parts
     except ValueError:  # pragma: no cover - defensive
@@ -246,6 +322,7 @@ def watch_directories(
     library_root: Path,
     display_root: Path | None,
     api_config: PhotoprismAPIConfig,
+    prefix_targets: dict[Path, Path],
     logger: logging.Logger,
 ) -> None:
     cmd = [
@@ -270,6 +347,7 @@ def watch_directories(
     assert proc.stdout is not None
 
     pending: set[Path] = set()
+    sorted_watch_paths = sorted(watch_paths, key=lambda p: len(p.parts), reverse=True)
 
     def _flush() -> None:
         nonlocal pending
@@ -296,7 +374,13 @@ def watch_directories(
             if not line:
                 continue
 
-            target = collect_target(line, library_root=library_root, logger=logger)
+            target = collect_target(
+                line,
+                library_root=library_root,
+                watch_paths=sorted_watch_paths,
+                prefix_targets=prefix_targets,
+                logger=logger,
+            )
             if target is not None:
                 pending.add(target)
 
@@ -319,6 +403,8 @@ def watch_directories(
                 target = collect_target(
                     follow_up,
                     library_root=library_root,
+                    watch_paths=sorted_watch_paths,
+                    prefix_targets=prefix_targets,
                     logger=logger,
                 )
                 if target is not None:
@@ -343,7 +429,8 @@ def main() -> None:
     logger = setup_logging()
     check_program('inotifywait', logger)
 
-    watch_paths = [_expand_path(path) for path in args.watch_dirs]
+    watch_configs: list[WatchConfig] = args.watch_configs
+    watch_paths = [config.path for config in watch_configs]
     for path in watch_paths:
         if not path.exists():
             logger.error('Watch path does not exist: %s', path)
@@ -368,10 +455,18 @@ def main() -> None:
 
     api_config = build_api_config(args)
 
+    prefix_targets: dict[Path, Path] = {}
+    for config in watch_configs:
+        if config.index_prefix_parts:
+            prefix_targets[config.path] = config.index_target(library_root)
+
     if args.initial_index:
         logger.info('Running initial index for watch directories')
+        initial_targets = {
+            prefix_targets.get(config.path, config.path) for config in watch_configs
+        }
         trigger_index(
-            set(watch_paths),
+            initial_targets,
             dry_run=args.dry_run,
             library_root=library_root,
             display_root=display_root,
@@ -386,9 +481,9 @@ def main() -> None:
         library_root=library_root,
         display_root=display_root,
         api_config=api_config,
+        prefix_targets=prefix_targets,
         logger=logger,
     )
-
 
 if __name__ == '__main__':
     main()
