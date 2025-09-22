@@ -40,17 +40,29 @@ def _expand_path(path: str | Path) -> Path:
     return Path(os.path.abspath(os.path.expanduser(str(path)))).resolve()
 
 
-def setup_logging() -> logging.Logger:
+def setup_logging(*, debug: bool = False) -> logging.Logger:
     logger = logging.getLogger('rog-syncobra')
     if logger.handlers:
+        console_level = logging.DEBUG if debug else logging.INFO
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and getattr(
+                handler, 'stream', None
+            ) is sys.stdout:
+                handler.setLevel(console_level)
+            elif handler.__class__.__name__ == 'JournalHandler':
+                handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        if debug:
+            logger.debug('Debug logging enabled')
         return logger
 
     logger.setLevel(logging.DEBUG)
 
     fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 
+    console_level = logging.DEBUG if debug else logging.INFO
+
     sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.INFO)
+    sh.setLevel(console_level)
     sh.setFormatter(fmt)
     logger.addHandler(sh)
 
@@ -72,9 +84,12 @@ def setup_logging() -> logging.Logger:
     except Exception:  # pragma: no cover - optional dependency
         jh = None
     if jh is not None:
-        jh.setLevel(logging.INFO)
+        jh.setLevel(logging.INFO if not debug else logging.DEBUG)
         jh.setFormatter(fmt)
         logger.addHandler(jh)
+
+    if debug:
+        logger.debug('Debug logging enabled')
 
     return logger
 
@@ -146,6 +161,11 @@ def parse_args() -> argparse.Namespace:
         '--dry-run',
         action='store_true',
         help='Show actions without sending API requests',
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable verbose debug logging (including REST API payloads)',
     )
     parser.add_argument(
         '--initial-index',
@@ -426,7 +446,7 @@ def watch_directories(
 
 def main() -> None:
     args = parse_args()
-    logger = setup_logging()
+    logger = setup_logging(debug=args.debug)
     check_program('inotifywait', logger)
 
     watch_configs: list[WatchConfig] = args.watch_configs
