@@ -55,7 +55,7 @@ MEDIA_EXT = {
 TMP_PATTERNS = [r"\\.part$", r"\\.tmp$", r"^\\.", r"\\.incomplete$", r"~$"]
 TMP_RE = [re.compile(pattern, re.IGNORECASE) for pattern in TMP_PATTERNS]
 
-MONTH_RE = re.compile(r"^(?P<year>\\d{4})/(?P<month>\\d{2})(?:/|$)")
+MONTH_RE = re.compile(r"^(?P<year>\d{4})/(?P<month>\d{2})(?:/|$)")
 
 
 @dataclass
