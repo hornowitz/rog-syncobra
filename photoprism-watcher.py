@@ -236,7 +236,28 @@ def worker_loop(cfg: Config, q: queue.Queue[str], client: PhotoPrismClient) -> N
                     if budget.allowed(ym, cfg.min_seconds_between_index):
                         dest = f"{cfg.dest_root.rstrip('/')}/{ym}"
                         verbose_print(cfg, f"[Worker] Triggering index for {dest}")
-                        client.index_path(dest)
+                        try:
+                            client.index_path(dest)
+                        except requests.exceptions.HTTPError as exc:
+                            status = exc.response.status_code if exc.response else "?"
+                            body = ""
+                            if exc.response is not None:
+                                body = exc.response.text.strip()
+                                if len(body) > 200:
+                                    body = f"{body[:200]}…"
+                            print(
+                                f"[Worker] Failed to index {dest}: HTTP {status} {body}",
+                                file=sys.stderr,
+                            )
+                            pending.add(ym)
+                            last_activity = time.time()
+                        except Exception as exc:  # pragma: no cover - defensive
+                            print(
+                                f"[Worker] Unexpected error indexing {dest}: {exc}",
+                                file=sys.stderr,
+                            )
+                            pending.add(ym)
+                            last_activity = time.time()
                     else:
                         print(f"[Debounce] Skipping {ym} (too soon)")
 
