@@ -27,13 +27,27 @@ class WatchConfig:
 
     path: Path
     index_prefix_parts: tuple[str, ...] | None
+    include_basename: bool = True
+    relative_levels: int | None = None
 
-    def index_target(self, library_root: Path) -> Path:
-        """Return the Photoprism target path for this watch configuration."""
+    def base_target(self, library_root: Path) -> Path:
+        """Return the base Photoprism target path for this watch configuration."""
 
         if self.index_prefix_parts:
-            return library_root.joinpath(*self.index_prefix_parts, self.path.name)
+            base = library_root.joinpath(*self.index_prefix_parts)
+            if self.include_basename:
+                return base.joinpath(self.path.name)
+            return base
         return self.path
+
+    def build_target(self, library_root: Path, *, relative_parts: Iterable[str] = ()) -> Path:
+        """Return the Photoprism target path including relative suffixes."""
+
+        base = self.base_target(library_root)
+        suffix = tuple(relative_parts)
+        if suffix:
+            return base.joinpath(*suffix)
+        return base
 
 
 def _expand_path(path: str | Path) -> Path:
@@ -96,22 +110,58 @@ def setup_logging(*, debug: bool = False) -> logging.Logger:
 
 def _parse_watch_argument(
     value: str, parser: argparse.ArgumentParser
-) -> tuple[str, tuple[str, ...] | None]:
+) -> tuple[str, tuple[str, ...] | None, bool, int | None]:
     if '=' in value:
         path_str, prefix = value.split('=', 1)
         prefix = prefix.strip()
     else:
         path_str, prefix = value, None
 
+    include_basename = True
+    relative_levels: int | None = None
+
     if prefix:
-        prefix = prefix.strip('/ ')
-        if not prefix:
-            prefix = None
+        segments = [segment.strip() for segment in prefix.split(';')]
+        prefix_value = segments[0]
+        option_segments = segments[1:]
+    else:
+        prefix_value = ''
+        option_segments = []
 
-    if not prefix:
-        return path_str, None
+    if option_segments:
+        for option in option_segments:
+            if not option:
+                continue
+            if '=' not in option:
+                parser.error(
+                    "watch directory options must use the form key=value (got '%s')" % option
+                )
+            key, option_value = (part.strip().lower() for part in option.split('=', 1))
+            if key == 'basename':
+                include_basename = option_value not in {'0', 'false', 'no'}
+            elif key in {'parts', 'depth'}:
+                if option_value in {'*', 'all'}:
+                    relative_levels = -1
+                else:
+                    try:
+                        relative_levels = int(option_value)
+                    except ValueError:  # pragma: no cover - defensive
+                        parser.error(
+                            "Invalid value for %s in watch directory option: %s"
+                            % (key, option_value)
+                        )
+                    if relative_levels < 0:
+                        parser.error(
+                            'watch directory option %s must not be negative' % key
+                        )
+            else:
+                parser.error("Unknown watch directory option: %s" % key)
 
-    prefix_path = Path(prefix)
+    prefix_value = prefix_value.strip('/ ')
+    if not prefix_value:
+        return path_str, None, include_basename, relative_levels
+
+    prefix_path = Path(prefix_value)
     if prefix_path.is_absolute():
         parser.error('index prefix must be a relative path')
 
@@ -123,7 +173,7 @@ def _parse_watch_argument(
             parser.error('index prefix must not contain ".." segments')
         parts.append(part)
 
-    return path_str, tuple(parts)
+    return path_str, tuple(parts), include_basename, relative_levels
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,7 +188,9 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help=(
             'Directory to monitor for changes; append =PREFIX to override the '
-            'target path reported to Photoprism. May be specified multiple times.'
+            'target path reported to Photoprism. Options may be added after '
+            'the prefix using ;key=value (e.g. parts=2, basename=false). '
+            'May be specified multiple times.'
         ),
     )
     parser.add_argument(
@@ -214,9 +266,16 @@ def parse_args() -> argparse.Namespace:
 
     watch_configs: list[WatchConfig] = []
     for raw_value in args.watch_dirs:
-        path_str, prefix_parts = _parse_watch_argument(raw_value, parser)
+        path_str, prefix_parts, include_basename, relative_levels = _parse_watch_argument(
+            raw_value, parser
+        )
         watch_configs.append(
-            WatchConfig(path=_expand_path(path_str), index_prefix_parts=prefix_parts)
+            WatchConfig(
+                path=_expand_path(path_str),
+                index_prefix_parts=prefix_parts,
+                include_basename=include_basename,
+                relative_levels=relative_levels,
+            )
         )
 
     args.watch_configs = watch_configs
@@ -292,7 +351,7 @@ def collect_target(
     *,
     library_root: Path,
     watch_paths: list[Path],
-    prefix_targets: dict[Path, Path],
+    watch_configs: dict[Path, WatchConfig],
     logger: logging.Logger,
 ) -> Path | None:
     candidate = Path(path_str)
@@ -321,8 +380,36 @@ def collect_target(
             matched_watch = watch_path
             break
 
-    if matched_watch is not None and matched_watch in prefix_targets:
-        return prefix_targets[matched_watch]
+    selected_parts: tuple[str, ...] = ()
+    if matched_watch is not None:
+        config = watch_configs.get(matched_watch)
+        if config is not None:
+            original_resolved = resolved
+            try:
+                relative_to_watch = original_resolved.relative_to(matched_watch).parts
+            except ValueError:
+                relative_to_watch = ()
+
+            if config.relative_levels is None:
+                selected_parts = ()
+                resolved = original_resolved
+            else:
+                if config.relative_levels < 0:
+                    selected_parts = tuple(relative_to_watch)
+                else:
+                    selected_parts = tuple(
+                        relative_to_watch[: config.relative_levels]
+                    )
+                resolved = (
+                    matched_watch.joinpath(*selected_parts)
+                    if selected_parts
+                    else matched_watch
+                )
+
+            if config.index_prefix_parts is not None:
+                return config.build_target(
+                    library_root, relative_parts=selected_parts
+                )
     try:
         relative_parts = resolved.relative_to(library_root).parts
     except ValueError:  # pragma: no cover - defensive
@@ -342,7 +429,7 @@ def watch_directories(
     library_root: Path,
     display_root: Path | None,
     api_config: PhotoprismAPIConfig,
-    prefix_targets: dict[Path, Path],
+    watch_configs: dict[Path, WatchConfig],
     logger: logging.Logger,
 ) -> None:
     cmd = [
@@ -398,7 +485,7 @@ def watch_directories(
                 line,
                 library_root=library_root,
                 watch_paths=sorted_watch_paths,
-                prefix_targets=prefix_targets,
+                watch_configs=watch_configs,
                 logger=logger,
             )
             if target is not None:
@@ -424,7 +511,7 @@ def watch_directories(
                     follow_up,
                     library_root=library_root,
                     watch_paths=sorted_watch_paths,
-                    prefix_targets=prefix_targets,
+                    watch_configs=watch_configs,
                     logger=logger,
                 )
                 if target is not None:
@@ -475,15 +562,12 @@ def main() -> None:
 
     api_config = build_api_config(args)
 
-    prefix_targets: dict[Path, Path] = {}
-    for config in watch_configs:
-        if config.index_prefix_parts:
-            prefix_targets[config.path] = config.index_target(library_root)
+    watch_config_map: dict[Path, WatchConfig] = {config.path: config for config in watch_configs}
 
     if args.initial_index:
         logger.info('Running initial index for watch directories')
         initial_targets = {
-            prefix_targets.get(config.path, config.path) for config in watch_configs
+            config.base_target(library_root) for config in watch_configs
         }
         trigger_index(
             initial_targets,
@@ -501,7 +585,7 @@ def main() -> None:
         library_root=library_root,
         display_root=display_root,
         api_config=api_config,
-        prefix_targets=prefix_targets,
+        watch_configs=watch_config_map,
         logger=logger,
     )
 
