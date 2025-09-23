@@ -72,6 +72,14 @@ class Config:
     min_seconds_between_index: int = 60
     max_queue_lag: int = 5
     dry_run: bool = False
+    verbose: bool = False
+
+
+def verbose_print(cfg: Config, message: str) -> None:
+    """Emit a message only when verbose mode is enabled."""
+
+    if cfg.verbose:
+        print(message)
 
 
 class PhotoPrismClient:
@@ -82,6 +90,7 @@ class PhotoPrismClient:
         self.session = requests.Session()
         self._token = cfg.token or os.environ.get("PHOTOPRISM_TOKEN")
         if self._token is None and cfg.pp_user and cfg.pp_pass:
+            verbose_print(self.cfg, "[PhotoPrism] Logging in with provided credentials")
             self._login()
 
     def _login(self) -> None:
@@ -119,6 +128,7 @@ class PhotoPrismClient:
         if self.cfg.dry_run:
             print(f"DRY-RUN: would POST {url} {payload}")
             return
+        verbose_print(self.cfg, f"[PhotoPrism] POST {url} {payload}")
         resp = self.session.post(
             url,
             json=payload,
@@ -127,6 +137,7 @@ class PhotoPrismClient:
             timeout=30,
         )
         if resp.status_code == 401 and self.cfg.pp_user and self.cfg.pp_pass:
+            verbose_print(self.cfg, "[PhotoPrism] Token expired, attempting re-login")
             self._login()
             resp = self.session.post(
                 url,
@@ -180,13 +191,17 @@ class MonthEventHandler(FileSystemEventHandler):
     def _maybe_enqueue(self, path: str) -> None:
         name = os.path.basename(path)
         if self._is_tmp(name):
+            verbose_print(self.cfg, f"[Watcher] Ignoring temporary file {path}")
             return
         if not self._is_media(path):
+            verbose_print(self.cfg, f"[Watcher] Ignoring non-media file {path}")
             return
         key = self._month_key(path)
         if not key:
+            verbose_print(self.cfg, f"[Watcher] Ignoring path outside YYYY/MM layout: {path}")
             return
         self.out_q.put(key)
+        verbose_print(self.cfg, f"[Watcher] Enqueued month {key} due to {path}")
 
     def on_created(self, event):  # type: ignore[override]
         if isinstance(event, FileCreatedEvent) and not event.is_directory:
@@ -211,13 +226,16 @@ def worker_loop(cfg: Config, q: queue.Queue[str], client: PhotoPrismClient) -> N
             key = q.get(timeout=1)
             pending.add(key)
             last_activity = time.time()
+            verbose_print(cfg, f"[Worker] Queued months now: {sorted(pending)}")
         except queue.Empty:
             if pending and (time.time() - last_activity) >= cfg.max_queue_lag:
                 months = sorted(pending)
                 pending.clear()
+                verbose_print(cfg, f"[Worker] Flushing months {months}")
                 for ym in months:
                     if budget.allowed(ym, cfg.min_seconds_between_index):
                         dest = f"{cfg.dest_root.rstrip('/')}/{ym}"
+                        verbose_print(cfg, f"[Worker] Triggering index for {dest}")
                         client.index_path(dest)
                     else:
                         print(f"[Debounce] Skipping {ym} (too soon)")
@@ -267,6 +285,11 @@ def parse_args() -> Config:
         action='store_true',
         help='Log actions without calling PhotoPrism',
     )
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Increase logging verbosity',
+    )
 
     args = parser.parse_args()
     return Config(
@@ -280,6 +303,7 @@ def parse_args() -> Config:
         min_seconds_between_index=args.min_seconds_between_index,
         max_queue_lag=args.max_queue_lag,
         dry_run=args.dry_run,
+        verbose=args.verbose,
     )
 
 
@@ -312,6 +336,10 @@ def main() -> None:
     print(
         f"Watching: {cfg.watch_dir} -> index under {cfg.dest_root} "
         f"(PhotoPrism {cfg.pp_base_url})",
+    )
+    verbose_print(
+        cfg,
+        "[Watcher] Verbose mode enabled; detailed events will be printed",
     )
 
     worker = threading.Thread(target=worker_loop, args=(cfg, q, client), daemon=True)
