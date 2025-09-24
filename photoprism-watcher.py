@@ -69,8 +69,8 @@ class Config:
     pp_pass: Optional[str] = None
     token: Optional[str] = None
     verify_tls: bool = True
-    min_seconds_between_index: int = 60
-    max_queue_lag: int = 5
+    min_seconds_between_index: int = 300
+    max_queue_lag: int = 300
     dry_run: bool = False
     verbose: bool = False
 
@@ -163,8 +163,31 @@ class IndexBudget:
         return False
 
 
+class MonthQueue:
+    """A queue that deduplicates months currently waiting to be processed."""
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue[str] = queue.Queue()
+        self._seen: Set[str] = set()
+        self._lock = threading.Lock()
+
+    def put(self, item: str) -> None:
+        with self._lock:
+            if item in self._seen:
+                return
+            self._seen.add(item)
+        self._queue.put(item)
+
+    def get(self, timeout: Optional[float] = None) -> str:
+        return self._queue.get(timeout=timeout)
+
+    def mark_processed(self, item: str) -> None:
+        with self._lock:
+            self._seen.discard(item)
+
+
 class MonthEventHandler(FileSystemEventHandler):
-    def __init__(self, cfg: Config, out_queue: queue.Queue[str]):
+    def __init__(self, cfg: Config, out_queue: MonthQueue):
         super().__init__()
         self.cfg = cfg
         self.out_q = out_queue
@@ -216,7 +239,7 @@ class MonthEventHandler(FileSystemEventHandler):
             self._maybe_enqueue(event.src_path)
 
 
-def worker_loop(cfg: Config, q: queue.Queue[str], client: PhotoPrismClient) -> None:
+def worker_loop(cfg: Config, q: MonthQueue, client: PhotoPrismClient) -> None:
     budget = IndexBudget()
     pending: Set[str] = set()
     last_activity = time.time()
@@ -224,6 +247,10 @@ def worker_loop(cfg: Config, q: queue.Queue[str], client: PhotoPrismClient) -> N
     while True:
         try:
             key = q.get(timeout=1)
+            if key in pending:
+                verbose_print(cfg, f"[Worker] Ignoring duplicate month {key}")
+                q.mark_processed(key)
+                continue
             pending.add(key)
             last_activity = time.time()
             verbose_print(cfg, f"[Worker] Queued months now: {sorted(pending)}")
@@ -260,6 +287,7 @@ def worker_loop(cfg: Config, q: queue.Queue[str], client: PhotoPrismClient) -> N
                             last_activity = time.time()
                     else:
                         print(f"[Debounce] Skipping {ym} (too soon)")
+                    q.mark_processed(ym)
 
 
 def parse_args() -> Config:
@@ -290,15 +318,17 @@ def parse_args() -> Config:
         help='Disable TLS verification',
     )
     parser.add_argument(
+        '-m',
         '--min-seconds-between-index',
         type=int,
-        default=60,
+        default=300,
         help='Min seconds between index calls per YYYY/MM',
     )
     parser.add_argument(
+        '-q',
         '--max-queue-lag',
         type=int,
-        default=5,
+        default=300,
         help='Seconds of idle before flushing pending months',
     )
     parser.add_argument(
@@ -337,7 +367,7 @@ def main() -> None:
 
     client = PhotoPrismClient(cfg)
 
-    q: queue.Queue[str] = queue.Queue()
+    q = MonthQueue()
     handler = MonthEventHandler(cfg, q)
 
     observer = Observer()
