@@ -113,6 +113,17 @@ Additional flags mirror the Photoprism options available in `rog-syncobra.py`:
 
 The watcher writes detailed logs to `/var/log/rog-syncobra/photoprism-watcher.log`.
 
+When installed through `install.sh` a systemd template unit
+`photoprism-watcher@.service` is also available. Copy
+`/etc/rog-syncobra/photoprism-watcher.conf.example` to
+`/etc/rog-syncobra/photoprism-watcher-<name>.conf`, adjust it to your
+environment, and enable the watcher with:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now photoprism-watcher@<name>.service
+```
+
 ## Installation
 
 The repository ships with an `install.sh` helper that copies the Python

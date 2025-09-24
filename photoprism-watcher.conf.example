@@ -1,0 +1,32 @@
+# Example configuration for photoprism-watcher@.service instances
+# Copy this file to /etc/rog-syncobra/photoprism-watcher-example.conf,
+# adjust the values, and enable it with:
+#   systemctl enable --now photoprism-watcher@example.service
+
+# Directory tree to watch for new media (expects YYYY/MM subdirectories)
+WATCH_DIR=/srv/media/library/originals
+
+# Root of the PhotoPrism originals library that should be indexed
+DEST_ROOT=/srv/media/library/originals
+
+# Base URL of the PhotoPrism API (usually ends with /api/v1)
+PHOTOPRISM_API_BASE_URL=https://photos.example.com/api/v1
+
+# Provide either API credentials or a pre-generated access token.
+PHOTOPRISM_API_USERNAME=admin
+PHOTOPRISM_API_PASSWORD=supersecret
+# PHOTOPRISM_API_TOKEN=
+
+# Set to 1 to skip TLS verification for self-signed certificates
+# PHOTOPRISM_API_INSECURE=1
+
+# Optional tuning parameters
+# MIN_SECONDS_BETWEEN_INDEX=300
+# MAX_QUEUE_LAG=300
+
+# Enable verbose logging or dry-run mode by setting these to 1
+# VERBOSE=1
+# DRY_RUN=1
+
+# Additional command-line arguments (space separated), e.g.:
+# EXTRA_ARGS="--initial-index"
