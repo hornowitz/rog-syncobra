@@ -68,8 +68,8 @@ def test_exif_sort_configures_stay_open_ready(monkeypatch, tmp_path):
 
         def write(self, data: str):
             self.writes.append(data)
-            execute_count = data.count("-execute\n")
-            for _ in range(execute_count):
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
                 self.stdout.push_ready()
             return len(data)
 
@@ -110,5 +110,9 @@ def test_exif_sort_configures_stay_open_ready(monkeypatch, tmp_path):
     proc = instances[0]
     assert proc.stdin.writes[0].startswith("-echo3\n{ready}\n")
     assert proc.stdout.history[0].strip() == "{ready}"
-    total_executes = sum(write.count("-execute\n") for write in proc.stdin.writes)
-    assert len(proc.stdout.history) == total_executes
+    total_ready = sum(write.count("-echo3\n{ready}\n") for write in proc.stdin.writes)
+    assert len(proc.stdout.history) == total_ready
+    for write in proc.stdin.writes[1:]:
+        if "-execute\n" not in write:
+            continue
+        assert "-echo3\n{ready}\n-execute\n" in write
