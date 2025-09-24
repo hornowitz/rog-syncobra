@@ -627,13 +627,14 @@ def exif_sort(src, dest, args):
         # block indefinitely waiting for more output. The echo command
         # needs to be consumed immediately; otherwise the first queued
         # job would see the marker and exit early.
-        proc.stdin.write("-echo3\n{ready}\n-execute\n")
+        ready_marker = "{ready}"
+        proc.stdin.write(f"-echo3\n{ready_marker}\n-execute\n")
         proc.stdin.flush()
         while True:
             line = proc.stdout.readline()
             if not line:
                 raise RuntimeError('exiftool terminated unexpectedly')
-            if line.strip() == '{ready}':
+            if line.strip() == ready_marker:
                 break
             if line.lower().startswith('error'):
                 logger.error("Exiftool: %s", line.strip())
@@ -648,7 +649,10 @@ def exif_sort(src, dest, args):
                     continue
                 full_cmd = [*cmd, *current_targets]
                 logger.info("Exiftool: %s", " ".join(full_cmd))
-                proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
+                payload = "\n".join(full_cmd[1:])
+                proc.stdin.write(
+                    f"{payload}\n-echo3\n{ready_marker}\n-execute\n"
+                )
                 proc.stdin.flush()
 
                 while True:
@@ -656,7 +660,7 @@ def exif_sort(src, dest, args):
                     if not line:
                         raise RuntimeError('exiftool terminated unexpectedly')
                     line = line.strip()
-                    if line == '{ready}':
+                    if line == ready_marker:
                         break
                     if line.lower().startswith('error'):
                         logger.error("Exiftool: %s", line)
