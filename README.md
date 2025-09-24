@@ -113,24 +113,31 @@ Additional flags mirror the Photoprism options available in `rog-syncobra.py`:
 
 The watcher writes detailed logs to `/var/log/rog-syncobra/photoprism-watcher.log`.
 
+## Installation
+
+The repository ships with an `install.sh` helper that copies the Python
+scripts, documentation, and systemd unit into their default locations. Run it as
+root (or through `sudo`) from the repository root:
+
+```bash
+sudo ./install.sh
+```
+
+By default the installer places executables under `/usr/local/bin`, the
+`rog-syncobra@.service` template under `/etc/systemd/system/`, and a
+configuration example at `/etc/rog-syncobra/rog-syncobra.conf.example`. Use the
+`--prefix`, `--systemd-dir`, and `--config-dir` options to override these
+defaults. Supply `--dry-run` to review the actions without changing the system.
+
 ## Systemd service
 An example systemd **template** unit is provided in `rog-syncobra@.service`. It
 reads instance-specific settings from `/etc/rog-syncobra/<instance>.conf`,
-allowing multiple configurations to run simultaneously.
-
-To install a new instance:
+allowing multiple configurations to run simultaneously. After running the
+installer, copy the example configuration and adjust it for your environment:
 
 ```bash
-sudo cp rog-syncobra@.service /etc/systemd/system/
-sudo mkdir -p /etc/rog-syncobra
-
-sudo tee /etc/rog-syncobra/example.conf <<'EOF'
-INPUTDIR=/path/to/watch
-DESTDIR=/path/to/destination
-# Additional rog-syncobra.py options (space-separated)
-EXTRA_ARGS=""
-EOF
-
+sudo cp /etc/rog-syncobra/rog-syncobra.conf.example /etc/rog-syncobra/example.conf
+sudoedit /etc/rog-syncobra/example.conf
 sudo systemctl daemon-reload
 sudo systemctl enable --now rog-syncobra@example.service
 ```
