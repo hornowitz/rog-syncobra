@@ -1014,6 +1014,7 @@ def main():
         check_program(cmd)
     if args.watch:
         check_program('inotifywait')
+        args.inputdir = _expand_path(args.inputdir)
         pipeline(args)
         logger.info(f"Entering watch mode on {args.inputdir}")
         while True:
