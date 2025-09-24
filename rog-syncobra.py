@@ -35,6 +35,8 @@ MEDIA_SCAN_EXTS = (
     | DCIM_EXTS
 )
 
+EXIFTOOL_READY_MARKER = "{ready}"
+
 
 def _expand_path(path: str) -> str:
     """Return a normalized absolute path with user expansion."""
@@ -621,6 +623,26 @@ def exif_sort(src, dest, args):
             bufsize=1,
         )
         assert proc.stdin and proc.stdout
+        # Configure a ready marker so we can reliably detect when each
+        # command completes. Without this, exiftool stays quiet after
+        # finishing a command in quiet mode which caused the worker to
+        # block indefinitely waiting for more output. The echo command
+        # needs to be consumed immediately; otherwise the first queued
+        # job would see the marker and exit early.
+        proc.stdin.write(f"-echo3\n{EXIFTOOL_READY_MARKER}\n-execute\n")
+        proc.stdin.flush()
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError('exiftool terminated unexpectedly')
+            if line.strip() == EXIFTOOL_READY_MARKER:
+                break
+            if line.lower().startswith('error'):
+                logger.error("Exiftool: %s", line.strip())
+            elif 'warning' in line.lower():
+                logger.warning("Exiftool: %s", line.strip())
+            elif line.strip():
+                logger.info("Exiftool: %s", line.strip())
         try:
             for cmd, extra in jobs:
                 current_targets = extra if extra is not None else worker_targets
@@ -628,7 +650,13 @@ def exif_sort(src, dest, args):
                     continue
                 full_cmd = [*cmd, *current_targets]
                 logger.info("Exiftool: %s", " ".join(full_cmd))
-                proc.stdin.write("\n".join(full_cmd[1:]) + "\n-execute\n")
+                args_block = "\n".join(full_cmd[1:])
+                payload = (
+                    f"{args_block}\n-echo3\n{EXIFTOOL_READY_MARKER}\n-execute\n"
+                    if args_block
+                    else f"-echo3\n{EXIFTOOL_READY_MARKER}\n-execute\n"
+                )
+                proc.stdin.write(payload)
                 proc.stdin.flush()
 
                 while True:
@@ -636,7 +664,7 @@ def exif_sort(src, dest, args):
                     if not line:
                         raise RuntimeError('exiftool terminated unexpectedly')
                     line = line.strip()
-                    if line == '{ready}':
+                    if line == EXIFTOOL_READY_MARKER:
                         break
                     if line.lower().startswith('error'):
                         logger.error("Exiftool: %s", line)
