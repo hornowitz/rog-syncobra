@@ -621,6 +621,26 @@ def exif_sort(src, dest, args):
             bufsize=1,
         )
         assert proc.stdin and proc.stdout
+        # Configure a ready marker so we can reliably detect when each
+        # command completes. Without this, exiftool stays quiet after
+        # finishing a command in quiet mode which caused the worker to
+        # block indefinitely waiting for more output. The echo command
+        # needs to be consumed immediately; otherwise the first queued
+        # job would see the marker and exit early.
+        proc.stdin.write("-echo3\n{ready}\n-execute\n")
+        proc.stdin.flush()
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError('exiftool terminated unexpectedly')
+            if line.strip() == '{ready}':
+                break
+            if line.lower().startswith('error'):
+                logger.error("Exiftool: %s", line.strip())
+            elif 'warning' in line.lower():
+                logger.warning("Exiftool: %s", line.strip())
+            elif line.strip():
+                logger.info("Exiftool: %s", line.strip())
         try:
             for cmd, extra in jobs:
                 current_targets = extra if extra is not None else worker_targets
