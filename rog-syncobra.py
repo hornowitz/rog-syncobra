@@ -604,10 +604,69 @@ def exif_sort(src, dest, args):
     def queue(cmd, extra_targets=None):
         jobs.append((list(cmd), list(extra_targets) if extra_targets is not None else None))
 
+    class _StayOpenUnavailable(RuntimeError):
+        """Raised when the stay_open ready marker is not supported."""
+
+    def _run_exiftool_oneshot(commands, worker_targets):
+        for cmd, extra in commands:
+            current_targets = extra if extra is not None else worker_targets
+            if not current_targets:
+                continue
+            full_cmd = [*cmd, *current_targets]
+            logger.info("Exiftool (compat): %s", " ".join(full_cmd))
+            proc = subprocess.Popen(
+                full_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            assert proc.stdout is not None
+            for raw_line in iter(proc.stdout.readline, ''):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                lower = line.lower()
+                if lower.startswith('error'):
+                    logger.error("Exiftool: %s", line)
+                elif 'warning' in lower:
+                    logger.warning("Exiftool: %s", line)
+                else:
+                    logger.info("Exiftool: %s", line)
+            code = proc.wait()
+            if code != 0:
+                raise RuntimeError(
+                    f"exiftool exited with {code} while running: {' '.join(full_cmd)}"
+                )
+        logger.info("Exiftool processing finished")
+
     def run_worker(_worker_id, worker_targets):
         if not worker_targets:
             logger.debug("Exiftool worker received no targets; skipping")
             return
+
+        def _consume_output_until_ready(proc, ready_marker):
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    raise RuntimeError('exiftool terminated unexpectedly')
+                stripped = line.strip()
+                lower = stripped.lower()
+                if 'option -echo3' in lower and (
+                    'unrecognized' in lower
+                    or 'unknown' in lower
+                    or 'invalid' in lower
+                ):
+                    raise _StayOpenUnavailable(stripped)
+                if stripped == ready_marker:
+                    break
+                if lower.startswith('error'):
+                    logger.error("Exiftool: %s", stripped)
+                elif 'warning' in lower:
+                    logger.warning("Exiftool: %s", stripped)
+                elif stripped:
+                    logger.info("Exiftool: %s", stripped)
+
         logger.info(
             "Starting exiftool processing for %d target(s)",
             len(worker_targets),
@@ -621,28 +680,27 @@ def exif_sort(src, dest, args):
             bufsize=1,
         )
         assert proc.stdin and proc.stdout
-        # Configure a ready marker so we can reliably detect when each
-        # command completes. Without this, exiftool stays quiet after
-        # finishing a command in quiet mode which caused the worker to
-        # block indefinitely waiting for more output. The echo command
-        # needs to be consumed immediately; otherwise the first queued
-        # job would see the marker and exit early.
         ready_marker = "{ready}"
-        proc.stdin.write(f"-echo3\n{ready_marker}\n-execute\n")
-        proc.stdin.flush()
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                raise RuntimeError('exiftool terminated unexpectedly')
-            if line.strip() == ready_marker:
-                break
-            if line.lower().startswith('error'):
-                logger.error("Exiftool: %s", line.strip())
-            elif 'warning' in line.lower():
-                logger.warning("Exiftool: %s", line.strip())
-            elif line.strip():
-                logger.info("Exiftool: %s", line.strip())
+
+        def _shutdown_process():
+            try:
+                if proc.stdin:
+                    proc.stdin.write("-stay_open\nFalse\n")
+                    proc.stdin.flush()
+            except Exception:
+                pass
+            finally:
+                try:
+                    proc.communicate(timeout=5)
+                except Exception:
+                    proc.kill()
+                    proc.communicate()
+
         try:
+            proc.stdin.write(f"-echo3\n{ready_marker}\n-execute\n")
+            proc.stdin.flush()
+            _consume_output_until_ready(proc, ready_marker)
+
             for cmd, extra in jobs:
                 current_targets = extra if extra is not None else worker_targets
                 if not current_targets:
@@ -654,25 +712,22 @@ def exif_sort(src, dest, args):
                     f"{payload}\n-echo3\n{ready_marker}\n-execute\n"
                 )
                 proc.stdin.flush()
-
-                while True:
-                    line = proc.stdout.readline()
-                    if not line:
-                        raise RuntimeError('exiftool terminated unexpectedly')
-                    line = line.strip()
-                    if line == ready_marker:
-                        break
-                    if line.lower().startswith('error'):
-                        logger.error("Exiftool: %s", line)
-                    elif 'warning' in line.lower():
-                        logger.warning("Exiftool: %s", line)
-                    elif line:
-                        logger.info("Exiftool: %s", line)
-        finally:
-            proc.stdin.write("-stay_open\nFalse\n")
-            proc.stdin.flush()
+                _consume_output_until_ready(proc, ready_marker)
+        except _StayOpenUnavailable as exc:
+            logger.warning(
+                "Exiftool does not support -echo3 (%s); falling back to one-shot mode",
+                exc,
+            )
+            if proc.poll() is None:
+                proc.kill()
             proc.communicate()
-            logger.info("Exiftool processing finished")
+            _run_exiftool_oneshot(jobs, worker_targets)
+            return
+        finally:
+            if proc.poll() is None:
+                _shutdown_process()
+
+        logger.info("Exiftool processing finished")
 
     heic_desc = describe_extensions(HEIC_EXTS)
     if heic_present:
