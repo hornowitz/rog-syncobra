@@ -58,6 +58,23 @@ TMP_RE = [re.compile(pattern, re.IGNORECASE) for pattern in TMP_PATTERNS]
 MONTH_RE = re.compile(r"^(?P<year>\d{4})/(?P<month>\d{2})(?:/|$)")
 
 
+def _normalize_pp_base_url(base_url: str) -> str:
+    """Ensure the PhotoPrism base URL includes the /api/v1 suffix."""
+
+    url = base_url.strip()
+    if not url:
+        raise ValueError("PhotoPrism base URL cannot be empty")
+    url = url.rstrip('/')
+
+    if url.endswith('/api/v1'):
+        return url
+    if url.endswith('/api'):
+        return f"{url}/v1"
+    if '/api/' in url:
+        return url
+    return f"{url}/api/v1"
+
+
 @dataclass
 class Config:
     """Runtime configuration for the watcher."""
@@ -73,6 +90,9 @@ class Config:
     max_queue_lag: int = 300
     dry_run: bool = False
     verbose: bool = False
+
+    def __post_init__(self) -> None:
+        self.pp_base_url = _normalize_pp_base_url(self.pp_base_url)
 
 
 def verbose_print(cfg: Config, message: str) -> None:
@@ -171,12 +191,13 @@ class MonthQueue:
         self._seen: Set[str] = set()
         self._lock = threading.Lock()
 
-    def put(self, item: str) -> None:
+    def put(self, item: str) -> bool:
         with self._lock:
             if item in self._seen:
-                return
+                return False
             self._seen.add(item)
         self._queue.put(item)
+        return True
 
     def get(self, timeout: Optional[float] = None) -> str:
         return self._queue.get(timeout=timeout)
@@ -223,8 +244,12 @@ class MonthEventHandler(FileSystemEventHandler):
         if not key:
             verbose_print(self.cfg, f"[Watcher] Ignoring path outside YYYY/MM layout: {path}")
             return
-        self.out_q.put(key)
-        verbose_print(self.cfg, f"[Watcher] Enqueued month {key} due to {path}")
+        if self.out_q.put(key):
+            verbose_print(self.cfg, f"[Watcher] Enqueued month {key} due to {path}")
+        else:
+            verbose_print(
+                self.cfg, f"[Watcher] Month {key} already pending; ignoring {path}"
+            )
 
     def on_created(self, event):  # type: ignore[override]
         if isinstance(event, FileCreatedEvent) and not event.is_directory:

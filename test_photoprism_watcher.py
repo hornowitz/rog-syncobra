@@ -60,6 +60,8 @@ SPEC.loader.exec_module(MODULE)
 
 Config = MODULE.Config
 MonthEventHandler = MODULE.MonthEventHandler
+MonthQueue = MODULE.MonthQueue
+_normalize_pp_base_url = MODULE._normalize_pp_base_url
 
 
 class MonthEventHandlerTest(unittest.TestCase):
@@ -74,6 +76,35 @@ class MonthEventHandlerTest(unittest.TestCase):
         self.assertEqual(
             handler._month_key("/root/watch/2025/08/example.jpg"),
             "2025/08",
+        )
+
+
+class HelpersTest(unittest.TestCase):
+    def test_normalizes_base_url_without_api_suffix(self):
+        cfg = Config(
+            watch_dir="/root/watch",
+            dest_root="/dest",
+            pp_base_url="http://photos.example.org",
+        )
+        self.assertEqual(cfg.pp_base_url, "http://photos.example.org/api/v1")
+
+    def test_month_queue_put_returns_false_for_duplicates(self):
+        q = MonthQueue()
+        self.assertTrue(q.put("2024/01"))
+        self.assertFalse(q.put("2024/01"))
+
+
+class NormalizeFunctionTest(unittest.TestCase):
+    def test_normalize_handles_existing_suffix(self):
+        self.assertEqual(
+            _normalize_pp_base_url("http://host/api/v1"),
+            "http://host/api/v1",
+        )
+
+    def test_normalize_handles_custom_base_path(self):
+        self.assertEqual(
+            _normalize_pp_base_url("http://host/photos"),
+            "http://host/photos/api/v1",
         )
 
 
