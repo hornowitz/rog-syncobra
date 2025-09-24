@@ -130,6 +130,13 @@ else
     echo "Installed systemd unit -> $SYSTEMD_DIR/rog-syncobra@.service"
 fi
 
+install_file 644 "photoprism-watcher@.service" "$SYSTEMD_DIR/photoprism-watcher@.service"
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "[dry-run] Would install PhotoPrism watcher unit -> $SYSTEMD_DIR/photoprism-watcher@.service"
+else
+    echo "Installed PhotoPrism watcher unit -> $SYSTEMD_DIR/photoprism-watcher@.service"
+fi
+
 install_file 644 "README.md" "$SHARE_DIR/README.md"
 if [[ $DRY_RUN -eq 1 ]]; then
     echo "[dry-run] Would install documentation -> $SHARE_DIR/README.md"
@@ -142,6 +149,13 @@ if [[ $DRY_RUN -eq 1 ]]; then
     echo "[dry-run] Would create configuration example -> $CONFIG_DIR/rog-syncobra.conf.example"
 else
     echo "Configuration example -> $CONFIG_DIR/rog-syncobra.conf.example"
+fi
+
+install_file 644 "photoprism-watcher.conf.example" "$CONFIG_DIR/photoprism-watcher.conf.example"
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "[dry-run] Would install watcher configuration example -> $CONFIG_DIR/photoprism-watcher.conf.example"
+else
+    echo "Watcher configuration example -> $CONFIG_DIR/photoprism-watcher.conf.example"
 fi
 
 echo

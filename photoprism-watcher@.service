@@ -1,0 +1,50 @@
+[Unit]
+Description=rog-syncobra PhotoPrism watcher (%i)
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/rog-syncobra/photoprism-watcher-%i.conf
+ExecStart=/usr/bin/env bash -c "set -euo pipefail; \
+  ARGS=(/usr/bin/env python3 /usr/local/bin/photoprism-watcher.py \
+    --watch-dir \"${WATCH_DIR:?Set WATCH_DIR in /etc/rog-syncobra/photoprism-watcher-%i.conf}\" \
+    --dest-root \"${DEST_ROOT:?Set DEST_ROOT in /etc/rog-syncobra/photoprism-watcher-%i.conf}\" \
+    --pp-base-url \"${PHOTOPRISM_API_BASE_URL:?Set PHOTOPRISM_API_BASE_URL in /etc/rog-syncobra/photoprism-watcher-%i.conf}\"\
+  ); \
+  if [[ -n \"${PHOTOPRISM_API_USERNAME:-}\" ]]; then \
+    ARGS+=(--pp-user \"${PHOTOPRISM_API_USERNAME}\"); \
+  fi; \
+  if [[ -n \"${PHOTOPRISM_API_PASSWORD:-}\" ]]; then \
+    ARGS+=(--pp-pass \"${PHOTOPRISM_API_PASSWORD}\"); \
+  fi; \
+  if [[ -n \"${PHOTOPRISM_API_TOKEN:-}\" ]]; then \
+    ARGS+=(--token \"${PHOTOPRISM_API_TOKEN}\"); \
+  fi; \
+  if [[ \"${PHOTOPRISM_API_INSECURE:-0}\" == \"1\" ]]; then \
+    ARGS+=(--insecure); \
+  fi; \
+  if [[ -n \"${MIN_SECONDS_BETWEEN_INDEX:-}\" ]]; then \
+    ARGS+=(--min-seconds-between-index \"${MIN_SECONDS_BETWEEN_INDEX}\"); \
+  fi; \
+  if [[ -n \"${MAX_QUEUE_LAG:-}\" ]]; then \
+    ARGS+=(--max-queue-lag \"${MAX_QUEUE_LAG}\"); \
+  fi; \
+  if [[ \"${DRY_RUN:-0}\" == \"1\" ]]; then \
+    ARGS+=(--dry-run); \
+  fi; \
+  if [[ \"${VERBOSE:-0}\" == \"1\" ]]; then \
+    ARGS+=(--verbose); \
+  fi; \
+  if [[ -n \"${EXTRA_ARGS:-}\" ]]; then \
+    read -r -a extra <<< \"${EXTRA_ARGS}\"; \
+    ARGS+=(\"${extra[@]}\"); \
+  fi; \
+  exec \"${ARGS[@]}\""
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=photoprism-watcher@%i
+LogsDirectory=rog-syncobra
+
+[Install]
+WantedBy=multi-user.target
