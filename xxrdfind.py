@@ -36,6 +36,15 @@ from tqdm import tqdm
 
 CHUNK_SIZE = 1 << 20  # 1 MB
 
+UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS = {
+    ".mkv",
+    ".avi",
+    ".wmv",
+    ".mts",
+    ".m2ts",
+    ".vob",
+}
+
 logger = logging.getLogger("xxrdfind")
 
 
@@ -86,6 +95,10 @@ def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64'
         raise ValueError(f"Unsupported algorithm: {algorithm}")
     try:
         if strip_metadata:
+            suffix = path.suffix.lower()
+            if suffix in UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS:
+                logger.info("skipping raw dedupe for %s", path)
+                return path, None
             cmd = ['exiftool', '-all=', '-o', '-', str(path)]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             assert proc.stdout is not None
