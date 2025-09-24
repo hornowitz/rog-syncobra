@@ -82,9 +82,19 @@ def test_exif_sort_configures_stay_open_ready(monkeypatch, tmp_path):
             self.kwargs = kwargs
             self.stdout = DummyStdout()
             self.stdin = DummyStdin(self.stdout)
+            self._closed = False
+            self._killed = False
 
         def communicate(self):
+            self._closed = True
             return ("", "")
+
+        def poll(self):
+            return 0 if self._closed else None
+
+        def kill(self):
+            self._killed = True
+            self._closed = True
 
     def fake_popen(*args, **kwargs):
         proc = DummyProc(*args, **kwargs)
@@ -116,3 +126,96 @@ def test_exif_sort_configures_stay_open_ready(monkeypatch, tmp_path):
         if "-execute\n" not in write:
             continue
         assert "-echo3\n{ready}\n-execute\n" in write
+
+
+def test_exif_sort_falls_back_when_echo3_missing(monkeypatch, tmp_path):
+    stay_open_instances = []
+    oneshot_commands = []
+
+    class StayOpenStdout:
+        def __init__(self):
+            self.lines = deque(["Warning: Unrecognized option -echo3\n"])
+
+        def readline(self):
+            if self.lines:
+                return self.lines.popleft()
+            return ''
+
+    class StayOpenStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class StayOpenProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdin = StayOpenStdin()
+            self.stdout = StayOpenStdout()
+            self._killed = False
+            self._terminated = False
+
+        def poll(self):
+            return None if not self._terminated else 0
+
+        def kill(self):
+            self._killed = True
+            self._terminated = True
+
+        def communicate(self):
+            self._terminated = True
+            return ("", "")
+
+    class OneShotStdout:
+        def __init__(self):
+            self.lines = deque(["1 image files updated\n", "{ready}\n"])
+
+        def readline(self):
+            if self.lines:
+                return self.lines.popleft()
+            return ''
+
+    class OneShotProc:
+        def __init__(self, cmd, *args, **kwargs):
+            self.cmd = cmd
+            self.stdout = OneShotStdout()
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, *args, **kwargs):
+        if cmd[:3] == ['exiftool', '-stay_open', 'True']:
+            proc = StayOpenProc(cmd, *args, **kwargs)
+            stay_open_instances.append(proc)
+            return proc
+        oneshot_commands.append(cmd)
+        proc = OneShotProc(cmd, *args, **kwargs)
+        return proc
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+
+    (tmp_path / "Screenshot_20240924.jpg").write_bytes(b"")
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=False,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+    assert stay_open_instances, "stay-open exiftool should be attempted first"
+    stay_open_proc = stay_open_instances[0]
+    assert stay_open_proc._killed is True
+    assert oneshot_commands, "fallback exiftool commands were not executed"
+    first_cmd = oneshot_commands[0]
+    assert first_cmd[0] == 'exiftool'
+    assert '-q' in first_cmd
