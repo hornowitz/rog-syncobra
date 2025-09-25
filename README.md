@@ -41,6 +41,7 @@ To automatically install missing packages run:
 - `-W, --watch` – watch mode; monitor for `CLOSE_WRITE` events
 - `-I, --inputdir DIR` – directory to watch/process (default: current directory)
 - `-g, --grace SECONDS` – seconds to wait after `close_write` (default: 300)
+- `--min-age-days DAYS` – only process media at least `DAYS` old (default: disabled)
 - `--archive-dir DIR` – directory to archive old files to
 - `--archive-years YEARS` – move directories older than this many years (default: 2)
 - `--skip-marker NAME` – skip directories that contain `NAME` (default: `.rog-syncobraignore`; set to an empty string to disable)
@@ -136,11 +137,12 @@ DRY_RUN=1
 CHECK_YEAR_MONTH=1
 GRACE=600
 ARCHIVE_DIR=/srv/archive
+MIN_AGE_DAYS=30
 DELDUPI=0
 ```
 
 This configuration runs rog-syncobra with `--verbose --dry-run
---check-year-mount --grace 600 --archive-dir /srv/archive --no-deldupi`. Leave
+--check-year-mount --grace 600 --min-age-days 30 --archive-dir /srv/archive --no-deldupi`. Leave
 variables unset to keep their defaults. Setting `SKIP_MARKER=` (an empty value)
 disables skip markers entirely. Legacy deployments using
 `EXTRA_ARGS="..."` continue to work, but the per-variable approach is easier to

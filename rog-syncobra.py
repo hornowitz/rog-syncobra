@@ -257,6 +257,7 @@ ENV_VALUE_FLAGS: dict[str, dict[str, Union[str, bool]]] = {
     'ARCHIVE_DIR': {'flag': '--archive-dir'},
     'ARCHIVE_YEARS': {'flag': '--archive-years'},
     'SKIP_MARKER': {'flag': '--skip-marker', 'allow_empty': True},
+    'MIN_AGE_DAYS': {'flag': '--min-age-days'},
 }
 
 
@@ -371,6 +372,8 @@ def parse_args():
                    help="Directory to watch/process (can be provided multiple times; default cwd)")
     p.add_argument('-g','--grace', type=int, default=300,
                    help="Seconds to wait after close_write (default 300)")
+    p.add_argument('--min-age-days', type=int, default=0,
+                   help="Minimum age in days before media is processed (0 disables)")
     p.add_argument('--archive-dir', default='',
                    help="Directory to archive old files to (e.g. /rogaliki/obrazy/0archiv)")
     p.add_argument('--archive-years', type=int, default=2,
@@ -393,6 +396,8 @@ def parse_args():
         p.error(f"unrecognized arguments: {' '.join(extra)}")
     if not args.inputdirs:
         args.inputdirs = [os.getcwd()]
+    if args.min_age_days < 0:
+        p.error("--min-age-days must be zero or greater")
 
     return args
 
@@ -535,6 +540,19 @@ def exif_sort(src, dest, args):
     skip_marker = args.skip_marker
     skip_rel = set()
     skip_abs = set()
+    min_age_days = int(getattr(args, 'min_age_days', 0) or 0)
+    if min_age_days < 0:
+        min_age_days = 0
+    cutoff_epoch = None
+    age_filter_args: Optional[list[str]] = None
+    if min_age_days:
+        cutoff_epoch = int(time.time() - (min_age_days * 86400))
+        if cutoff_epoch < 0:
+            cutoff_epoch = 0
+        age_filter_args = ['-if', f'$FileModifyDate# <= {cutoff_epoch}']
+        logger.info(
+            "Requiring minimum file age of %d day(s) before processing", min_age_days
+        )
 
     def mark_skip(rel_path):
         if rel_path in skip_rel:
@@ -618,10 +636,62 @@ def exif_sort(src, dest, args):
         os.chdir(cwd)
         return False
 
+    if age_filter_args and cutoff_epoch is not None:
+
+        def _has_eligible_media() -> bool:
+            stack = [os.path.join(src_abs, target) for target in targets]
+            seen_dirs = set()
+            while stack:
+                current = stack.pop()
+                if current in seen_dirs:
+                    continue
+                seen_dirs.add(current)
+                try:
+                    with os.scandir(current) as iterator:
+                        for entry in iterator:
+                            try:
+                                if entry.is_file(follow_symlinks=False):
+                                    _, ext = os.path.splitext(entry.name)
+                                    if not ext:
+                                        continue
+                                    if ext.lower() not in MEDIA_SCAN_EXTS:
+                                        continue
+                                    try:
+                                        mtime = entry.stat(follow_symlinks=False).st_mtime
+                                    except FileNotFoundError:
+                                        continue
+                                    if mtime <= cutoff_epoch:
+                                        return True
+                                elif args.recursive and entry.is_dir(follow_symlinks=False):
+                                    entry_abs = _expand_path(entry.path)
+                                    if skip_abs and any(
+                                        entry_abs == skip or entry_abs.startswith(f"{skip}{os.sep}")
+                                        for skip in skip_abs
+                                    ):
+                                        continue
+                                    stack.append(entry.path)
+                            except FileNotFoundError:
+                                continue
+                except FileNotFoundError:
+                    continue
+            return False
+
+        if not _has_eligible_media():
+            logger.info(
+                "Skipping exiftool processing in %s (no media at least %d day(s) old)",
+                src_abs,
+                min_age_days,
+            )
+            os.chdir(cwd)
+            return False
+
     jobs: list[tuple[list[str], Optional[list[str]], Optional[str]]] = []
 
     def queue(cmd, extra_targets=None, message=None):
         job_cmd = list(cmd)
+        if age_filter_args and age_filter_args[1] not in job_cmd:
+            insert_at = 2 if len(job_cmd) >= 2 and job_cmd[0] == 'exiftool' else len(job_cmd)
+            job_cmd[insert_at:insert_at] = age_filter_args
         job_targets = list(extra_targets) if extra_targets is not None else None
         logger.debug(
             "Queued exiftool job: cmd=%s extra_targets=%s message=%s",
