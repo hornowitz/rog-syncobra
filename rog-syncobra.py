@@ -122,20 +122,24 @@ except Exception as e:
     print(f"ERROR: could not create log dir {logdir}: {e}", file=sys.stderr)
 
 logger = logging.getLogger('rog-syncobra')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
+
+LOG_HANDLERS: list[logging.Handler] = []
 
 sh = logging.StreamHandler(sys.stdout)
 sh.setLevel(logging.INFO)
 sh.setFormatter(fmt)
 logger.addHandler(sh)
+LOG_HANDLERS.append(sh)
 
 try:
     fh = logging.FileHandler(LOGFILE)
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(logging.INFO)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
+    LOG_HANDLERS.append(fh)
 except Exception as e:
     logger.error(f"Could not open log file {LOGFILE}: {e}")
 
@@ -145,6 +149,7 @@ try:
     jh.setLevel(logging.INFO)
     jh.setFormatter(fmt)
     logger.addHandler(jh)
+    LOG_HANDLERS.append(jh)
 except Exception:
     pass
 # ────────────────────────────────────────────────────────────────────────────────
@@ -311,6 +316,13 @@ def install_requirements():
         logger.error(f"Failed to install dependencies: {e}")
         sys.exit(1)
 
+def set_logging_verbosity(enable_debug: bool) -> None:
+    level = logging.DEBUG if enable_debug else logging.INFO
+    logger.setLevel(level)
+    for handler in LOG_HANDLERS:
+        handler.setLevel(level)
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="rog-syncobra: sort & dedupe media")
     p.add_argument('-r','--recursive', action='store_true', help="Recurse subdirectories")
@@ -336,6 +348,8 @@ def parse_args():
                    help="Show actions without executing")
     p.add_argument('--debug', action='store_true',
                    help="Verbose exiftool (-v); default is quiet (-q)")
+    p.add_argument('-v','--verbose', action='store_true',
+                   help="Enable verbose logging output")
     p.add_argument('-W','--watch', action='store_true',
                    help="Watch mode: monitor for CLOSE_WRITE events")
     p.add_argument('-I','--inputdir', default=os.getcwd(),
@@ -1120,6 +1134,7 @@ def pipeline(args):
 
 def main():
     args = parse_args()
+    set_logging_verbosity(args.debug or getattr(args, 'verbose', False))
     if args.install_deps:
         install_requirements()
         return
