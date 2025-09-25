@@ -36,6 +36,7 @@ To automatically install missing packages run:
 - `-m, --move2targetdir DIR` – destination directory for processed files
 - `-w, --whatsapp` – enable WhatsApp media handling
 - `-n, --dry-run` – show actions without executing them
+- `-v, --verbose` – enable verbose logging output
 - `--debug` – verbose exiftool output
 - `--exiftool-workers N` – run exiftool with up to `N` parallel workers (default: auto)
 - `-W, --watch` – watch mode; monitor for `CLOSE_WRITE` events
