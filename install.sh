@@ -91,39 +91,39 @@ INPUTDIR=/srv/media/incoming
 # Destination directory for sorted files
 DESTDIR=/srv/media/library
 
-# Additional arguments passed to rog-syncobra.py (optional).
+# Optional feature toggles understood by rog-syncobra.py.
 #
-# Separate options with spaces just like you would on the command line.
-# Boolean flags enable features when present (equivalent to verbose=1,
-# dedup=1 style switches). Common examples include:
-#   --verbose                     # chattier logging
-#   --dry-run                     # simulate actions only
-#   --debug                       # detailed exiftool output
-#   --deldupi                     # metadata dedupe on source
-#   --ddwometadata                # raw-content dedupe on source/destination
-#   --dedupsourceanddest          # compare metadata against destination
-#   --dedup-destination-final     # run metadata dedupe after moving files
-#   --year-month-sort             # ensure Year/Month layout (default)
-#   --check-year-mount            # verify destination mount point
-#   --whatsapp                    # enable WhatsApp-specific handling
-#   --archive-dir /srv/media/archive
-#   --archive-years 3
-#   --skip-marker .rog-syncobraignore
-#   --exiftool-workers 4
-#   --grace 600                   # delay (seconds) before processing events
-#   --photoprism-index-command "photoprism index -f -c {path_q}"
-#   --photoprism-api-base-url https://photos.example.com
-#   --photoprism-api-username admin
-#   --photoprism-api-password supersecret
-#   --photoprism-api-rescan
-#   --photoprism-api-cleanup
-#   --photoprism-api-strip-prefix /mnt/photos
-#   --photoprism-api-call /index
+# Each option is controlled by its own environment variable instead of a
+# combined EXTRA_ARGS string. Set the value to 1 to enable, 0 to disable
+# (where a "no" form exists), or provide the desired value directly. Common
+# examples include:
 #
-# Combine whichever options you need, for example:
-# EXTRA_ARGS="--verbose --dedupsourceanddest --dedup-destination-final"
-# EXTRA_ARGS="--dry-run --debug --exiftool-workers 8 --grace 900"
-# EXTRA_ARGS="--photoprism-api-base-url https://photos.example.com --photoprism-api-username admin --photoprism-api-password supersecret --photoprism-api-rescan --photoprism-api-strip-prefix /mnt/photos"
+# VERBOSE=1                 # chattier logging output
+# DRY_RUN=1                 # simulate actions without touching files
+# DEBUG=1                   # detailed exiftool logging
+# DDWOMETADATA=1            # raw-content dedupe between source and destination
+# DELDUPI=0                 # skip metadata dedupe on the source tree
+# DEDUPSOURCEANDDEST=1      # compare metadata with the destination before moving
+# DEDUP_DESTINATION_FINAL=1 # run metadata dedupe after processing completes
+# YEAR_MONTH_SORT=1         # keep YYYY/MM layout (enabled by default)
+# CHECK_YEAR_MOUNT=1        # verify the destination year folder is a mount point
+# CHECK_YEAR_MONTH=1        # alias of CHECK_YEAR_MOUNT for convenience
+# WHATSAPP=1                # enable WhatsApp-specific handling
+# GRACE=600                 # wait (seconds) after changes before processing
+# ARCHIVE_DIR=/srv/media/archive
+# ARCHIVE_YEARS=3
+# SKIP_MARKER=              # disable skip markers entirely
+#
+# Multiple toggles may be combined by adding one assignment per line. For
+# example:
+#
+# VERBOSE=1
+# DRY_RUN=1
+# CHECK_YEAR_MONTH=1
+# GRACE=600
+#
+# Legacy deployments that still rely on EXTRA_ARGS="..." continue to work, but
+# the dedicated variables above are easier to read and audit.
 CFG
 }
 

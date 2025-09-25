@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import logging
 import argparse
+import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,7 +13,6 @@ from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
 import xxrdfind
-from photoprism_api import PhotoprismAPIConfig, handle_photoprism_index
 
 HEIC_EXTS = {'.heic', '.heif'}
 SCREENSHOT_EXTS = {'.png', '.jpg', '.jpeg', '.heic', '.heif', '.webp'}
@@ -173,24 +173,6 @@ class OperationTracker:
     def record_moved(self, src: Union[Path, str], dest: Union[Path, str]) -> None:
         self.moved.append((Path(src), Path(dest)))
 
-    def photoprism_target_directories(self) -> set[Path]:
-        """Return directories that should be re-indexed by Photoprism."""
-        targets: set[Path] = set()
-
-        for deleted_path in self.deleted:
-            path = Path(deleted_path)
-            candidate = path if not path.suffix else path.parent
-            if str(candidate):
-                targets.add(candidate)
-
-        for _src, dest in self.moved:
-            dest_path = Path(dest)
-            dest_candidate = dest_path if not dest_path.suffix else dest_path.parent
-            if str(dest_candidate):
-                targets.add(dest_candidate)
-
-        return targets
-
     def log_summary(self) -> None:
         if self.deleted:
             logger.info(
@@ -212,84 +194,6 @@ class OperationTracker:
 
 
 operation_tracker = OperationTracker()
-
-
-def collect_photoprism_targets(
-    tracker: OperationTracker,
-    library_root: Union[Path, str, None],
-    exif_changed: bool,
-) -> list[Path]:
-    targets: set[Path] = set()
-
-    for candidate in tracker.photoprism_target_directories():
-        try:
-            resolved = Path(_expand_path(str(candidate)))
-        except OSError:
-            continue
-        targets.add(resolved)
-
-    if exif_changed and library_root is not None:
-        try:
-            root_path = Path(_expand_path(str(library_root)))
-        except OSError:
-            root_path = None
-        else:
-            targets.add(root_path)
-
-    return sorted(targets, key=lambda p: str(p))
-
-
-def run_photoprism_api_only(args) -> None:
-    base_url = args.photoprism_api_base_url.strip()
-    if not base_url or not args.photoprism_api_username or not args.photoprism_api_password:
-        logger.error(
-            "Photoprism API call requested but credentials are incomplete; "
-            "please provide base URL, username, and password",
-        )
-        sys.exit(1)
-
-    api_config = PhotoprismAPIConfig(
-        base_url=base_url,
-        username=args.photoprism_api_username,
-        password=args.photoprism_api_password,
-        verify_tls=not args.photoprism_api_insecure,
-        rescan=args.photoprism_api_rescan,
-        cleanup=args.photoprism_api_cleanup,
-        path_strip_prefixes=tuple(args.photoprism_api_strip_prefix or ()),
-    )
-
-    destination_root = args.move2targetdir or args.inputdir
-    library_root = Path(_expand_path(destination_root))
-    display_root = library_root
-    raw_targets = args.photoprism_api_call or ['/']
-    targets: list[Path] = []
-    for raw in raw_targets:
-        raw = (raw or '/').strip()
-        if raw in ('', '/'):
-            targets.append(library_root)
-            continue
-        expanded = os.path.expanduser(raw)
-        candidate = Path(expanded)
-        if candidate.is_absolute():
-            resolved = Path(_expand_path(str(candidate)))
-        else:
-            resolved = Path(_expand_path(str(library_root / candidate)))
-        targets.append(resolved)
-
-    logger.info(
-        "Photoprism API only mode: triggering index for %s",
-        ", ".join(str(t) for t in targets) if targets else '/',
-    )
-
-    handle_photoprism_index(
-        args.dry_run,
-        True,
-        targets,
-        library_root,
-        api_config,
-        display_root,
-    )
-
 
 def check_program(name):
     if not shutil.which(name):
@@ -321,6 +225,111 @@ def set_logging_verbosity(enable_debug: bool) -> None:
     logger.setLevel(level)
     for handler in LOG_HANDLERS:
         handler.setLevel(level)
+
+
+TRUE_VALUES = {'1', 'true', 'yes', 'on'}
+FALSE_VALUES = {'0', 'false', 'no', 'off'}
+
+ENV_BOOL_FLAGS: dict[str, str] = {
+    'VERBOSE': '--verbose',
+    'DEBUG': '--debug',
+    'DRY_RUN': '--dry-run',
+    'WATCH': '--watch',
+    'RECURSIVE': '--recursive',
+    'WHATSAPP': '--whatsapp',
+    'DDWOMETADATA': '--ddwometadata',
+    'YEAR_MONTH_SORT': '--year-month-sort',
+    'CHECK_YEAR_MOUNT': '--check-year-mount',
+    'CHECK_YEAR_MONTH': '--check-year-mount',
+    'DEDUP_DESTINATION_FINAL': '--dedup-destination-final',
+}
+
+ENV_TOGGLE_FLAGS: dict[str, tuple[str, str]] = {
+    'DELDUPI': ('--deldupi', '--no-deldupi'),
+    'DEDUPSOURCEANDDEST': (
+        '--dedupsourceanddest',
+        '--no-dedupsourceanddest',
+    ),
+}
+
+ENV_VALUE_FLAGS: dict[str, dict[str, Union[str, bool]]] = {
+    'GRACE': {'flag': '--grace'},
+    'ARCHIVE_DIR': {'flag': '--archive-dir'},
+    'ARCHIVE_YEARS': {'flag': '--archive-years'},
+    'SKIP_MARKER': {'flag': '--skip-marker', 'allow_empty': True},
+}
+
+
+def _parse_env_bool(value: str) -> Union[bool, None]:
+    lowered = value.strip().lower()
+    if lowered in TRUE_VALUES:
+        return True
+    if lowered in FALSE_VALUES:
+        return False
+    return None
+
+
+def _collect_cli_args_from_env(environ: Optional[dict[str, str]] = None) -> list[str]:
+    env = os.environ if environ is None else environ
+    cli_args: list[str] = []
+
+    for var, flag in ENV_BOOL_FLAGS.items():
+        raw = env.get(var)
+        if raw is None:
+            continue
+        result = _parse_env_bool(raw)
+        if result is None:
+            logger.warning(
+                "Ignoring %s=%s (expected one of %s or %s)",
+                var,
+                raw,
+                '/'.join(sorted(TRUE_VALUES)),
+                '/'.join(sorted(FALSE_VALUES)),
+            )
+            continue
+        if result:
+            cli_args.append(flag)
+
+    for var, (enable_flag, disable_flag) in ENV_TOGGLE_FLAGS.items():
+        raw = env.get(var)
+        if raw is None:
+            continue
+        result = _parse_env_bool(raw)
+        if result is None:
+            logger.warning(
+                "Ignoring %s=%s (expected one of %s or %s)",
+                var,
+                raw,
+                '/'.join(sorted(TRUE_VALUES)),
+                '/'.join(sorted(FALSE_VALUES)),
+            )
+            continue
+        cli_args.append(enable_flag if result else disable_flag)
+
+    for var, spec in ENV_VALUE_FLAGS.items():
+        if var not in env:
+            continue
+        raw_value = env[var]
+        value = raw_value.strip()
+        if value == '' and not spec.get('allow_empty', False):
+            continue
+        cli_args.extend([spec['flag'], value])
+
+    extra = env.get('EXTRA_ARGS')
+    if extra:
+        try:
+            cli_args.extend(shlex.split(extra))
+        except ValueError as exc:
+            logger.warning("Could not parse EXTRA_ARGS (%s): %s", extra, exc)
+
+    return cli_args
+
+
+def _inject_env_cli_args() -> None:
+    env_args = _collect_cli_args_from_env()
+    if not env_args:
+        return
+    sys.argv = [sys.argv[0], *env_args, *sys.argv[1:]]
 
 
 def parse_args():
@@ -366,40 +375,6 @@ def parse_args():
                    help="Run metadata dedupe on destination after processing completes")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
-    p.add_argument('-B','--photoprism-api-base-url', default='',
-                   help="Photoprism API base URL (e.g. https://photos.example.com)")
-    p.add_argument('-U','--photoprism-api-username', default='',
-                   help="Photoprism API username")
-    p.add_argument('-P','--photoprism-api-password', default='',
-                   help="Photoprism API password")
-    p.add_argument('-R','--photoprism-api-rescan', action='store_true',
-                   help="Request a full rescan when triggering the Photoprism API")
-    p.add_argument('-C','--photoprism-api-cleanup', action='store_true',
-                   help="Ask Photoprism to run cleanup after indexing via the API")
-    p.add_argument('-T','--photoprism-api-insecure', action='store_true',
-                   help="Disable TLS certificate verification for Photoprism API calls")
-    p.add_argument(
-        '--photoprism-api-strip-prefix',
-        metavar='PREFIX',
-        action='append',
-        default=[],
-        help=(
-            "Strip PREFIX from the beginning of paths before they are sent to the "
-            "Photoprism API. May be specified multiple times."
-        ),
-    )
-    p.add_argument(
-        '--photoprism-api-call',
-        metavar='PATH',
-        action='append',
-        nargs='?',
-        const='/',
-        default=[],
-        help=(
-            "Trigger the Photoprism API for PATH (defaults to '/') and exit without "
-            "performing any other processing; may be specified multiple times"
-        ),
-    )
 
     # Use parse_known_args so we can gracefully ignore stray '-' arguments.
     # A single dash can sneak in via misconfigured systemd unit files or
@@ -1101,45 +1076,12 @@ def pipeline(args):
 
     operation_tracker.log_summary()
 
-    changes_detected = bool(
-        exif_changed or operation_tracker.deleted or operation_tracker.moved
-    )
-    library_root = Path(dest_abs if dest_is_distinct else src_abs)
-    display_root = library_root
-    photoprism_targets = collect_photoprism_targets(
-        operation_tracker,
-        library_root,
-        exif_changed,
-    )
-    api_config = None
-    base_url = args.photoprism_api_base_url.strip()
-    if base_url:
-        api_config = PhotoprismAPIConfig(
-            base_url=base_url,
-            username=args.photoprism_api_username,
-            password=args.photoprism_api_password,
-            verify_tls=not args.photoprism_api_insecure,
-            rescan=args.photoprism_api_rescan,
-            cleanup=args.photoprism_api_cleanup,
-            path_strip_prefixes=tuple(args.photoprism_api_strip_prefix or ()),
-        )
-    handle_photoprism_index(
-        args.dry_run,
-        changes_detected,
-        photoprism_targets,
-        library_root,
-        api_config,
-        display_root,
-    )
-
 def main():
+    _inject_env_cli_args()
     args = parse_args()
     set_logging_verbosity(args.debug or getattr(args, 'verbose', False))
     if args.install_deps:
         install_requirements()
-        return
-    if args.photoprism_api_call:
-        run_photoprism_api_only(args)
         return
     for cmd in ('exiftool','xxhsum','sort','du','df'):
         check_program(cmd)
