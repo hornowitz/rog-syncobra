@@ -4,6 +4,8 @@ import types
 from collections import deque
 from pathlib import Path
 
+import pytest
+
 if "xxhash" not in sys.modules:
     class _DummyHash:
         def update(self, _data):
@@ -128,13 +130,20 @@ def test_exif_sort_configures_stay_open_ready(monkeypatch, tmp_path):
         assert "-echo3\n{ready}\n-execute\n" in write
 
 
-def test_exif_sort_falls_back_when_echo3_missing(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "warning_message",
+    [
+        "Warning: Unrecognized option -echo3\n",
+        "Warning: Option -echo3 is not supported\n",
+    ],
+)
+def test_exif_sort_falls_back_when_echo3_missing(monkeypatch, tmp_path, warning_message):
     stay_open_instances = []
     oneshot_commands = []
 
     class StayOpenStdout:
-        def __init__(self):
-            self.lines = deque(["Warning: Unrecognized option -echo3\n"])
+        def __init__(self, message: str):
+            self.lines = deque([message])
 
         def readline(self):
             if self.lines:
@@ -157,7 +166,7 @@ def test_exif_sort_falls_back_when_echo3_missing(monkeypatch, tmp_path):
             self.args = args
             self.kwargs = kwargs
             self.stdin = StayOpenStdin()
-            self.stdout = StayOpenStdout()
+            self.stdout = StayOpenStdout(warning_message)
             self._killed = False
             self._terminated = False
 
