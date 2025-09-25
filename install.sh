@@ -193,6 +193,7 @@ echo
 if [[ $DRY_RUN -eq 1 ]]; then
     echo "Dry-run complete. No changes were made."
 else
+    systemctl daemon-reload
     cat <<EOM
 Installation complete.
 Next steps:
