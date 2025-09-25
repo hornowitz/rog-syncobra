@@ -91,8 +91,39 @@ INPUTDIR=/srv/media/incoming
 # Destination directory for sorted files
 DESTDIR=/srv/media/library
 
-# Additional arguments passed to rog-syncobra.py (optional)
-# EXTRA_ARGS="--year-month-sort --photoprism-api-base-url https://photos.example.com"
+# Additional arguments passed to rog-syncobra.py (optional).
+#
+# Separate options with spaces just like you would on the command line.
+# Boolean flags enable features when present (equivalent to verbose=1,
+# dedup=1 style switches). Common examples include:
+#   --verbose                     # chattier logging
+#   --dry-run                     # simulate actions only
+#   --debug                       # detailed exiftool output
+#   --deldupi                     # metadata dedupe on source
+#   --ddwometadata                # raw-content dedupe on source/destination
+#   --dedupsourceanddest          # compare metadata against destination
+#   --dedup-destination-final     # run metadata dedupe after moving files
+#   --year-month-sort             # ensure Year/Month layout (default)
+#   --check-year-mount            # verify destination mount point
+#   --whatsapp                    # enable WhatsApp-specific handling
+#   --archive-dir /srv/media/archive
+#   --archive-years 3
+#   --skip-marker .rog-syncobraignore
+#   --exiftool-workers 4
+#   --grace 600                   # delay (seconds) before processing events
+#   --photoprism-index-command "photoprism index -f -c {path_q}"
+#   --photoprism-api-base-url https://photos.example.com
+#   --photoprism-api-username admin
+#   --photoprism-api-password supersecret
+#   --photoprism-api-rescan
+#   --photoprism-api-cleanup
+#   --photoprism-api-strip-prefix /mnt/photos
+#   --photoprism-api-call /index
+#
+# Combine whichever options you need, for example:
+# EXTRA_ARGS="--verbose --dedupsourceanddest --dedup-destination-final"
+# EXTRA_ARGS="--dry-run --debug --exiftool-workers 8 --grace 900"
+# EXTRA_ARGS="--photoprism-api-base-url https://photos.example.com --photoprism-api-username admin --photoprism-api-password supersecret --photoprism-api-rescan --photoprism-api-strip-prefix /mnt/photos"
 CFG
 }
 

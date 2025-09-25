@@ -157,6 +157,21 @@ sudo systemctl enable --now rog-syncobra@example.service
 Create additional `*.conf` files under `/etc/rog-syncobra/` and start them with
 `systemctl enable --now rog-syncobra@<name>.service` to run multiple instances.
 
+Each configuration file may define `EXTRA_ARGS` to pass additional
+`rog-syncobra.py` options. Provide them exactly as on the command line—for
+example `--verbose` (akin to `verbose=1`), `--dedupsourceanddest`, or
+`--dedup-destination-final`. Options requiring values, such as
+`--archive-dir /srv/archive` or `--photoprism-api-base-url
+https://photos.example.com`, can be combined in the same quoted string:
+
+```bash
+EXTRA_ARGS="--verbose --dedupsourceanddest --dedup-destination-final --archive-dir /srv/archive --archive-years 3"
+```
+
+See the comments inside `/etc/rog-syncobra/rog-syncobra.conf.example` for a
+catalogue of common toggles (deduplication, WhatsApp handling, Photoprism API
+integration, etc.) and ready-to-copy combinations.
+
 ## Logging
 
 When running under systemd the service logs to the system journal and can be
