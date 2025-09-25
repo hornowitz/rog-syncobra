@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import types
@@ -48,9 +49,45 @@ class FileHashTest(TestCase):
                 with self.assertLogs("xxrdfind", level="INFO") as logs:
                     result = xxrdfind.file_hash(video_path, strip_metadata=True)
 
-            self.assertEqual((video_path, None), result)
+            self.assertEqual((video_path, None, 'unsupported_exiftool_extension'), result)
             popen_mock.assert_not_called()
             self.assertTrue(
                 any("skipping raw dedupe for" in message for message in logs.output),
                 logs.output,
             )
+
+
+class CacheFailureTest(TestCase):
+    def test_failed_hash_is_cached_and_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "video.mp4"
+            target.write_bytes(b"data")
+
+            def fake_file_hash(path, strip_metadata=False, algorithm='xxh64'):
+                return path, None, 'exiftool failed'
+
+            cache_path = root / ".xxrdfind_cache_stripped.json"
+
+            with patch("xxrdfind.file_hash", side_effect=fake_file_hash):
+                xxrdfind.find_duplicates(
+                    [root],
+                    strip_metadata=True,
+                    show_progress=False,
+                )
+
+            cache_data = json.loads(cache_path.read_text())
+            rel = str(target.relative_to(root))
+            self.assertIn('xxh64_failed', cache_data[rel])
+            self.assertEqual('exiftool failed', cache_data[rel]['xxh64_failed'])
+
+            with patch("xxrdfind.file_hash", side_effect=fake_file_hash) as file_hash_mock:
+                xxrdfind.find_duplicates(
+                    [root],
+                    strip_metadata=True,
+                    show_progress=False,
+                )
+                self.assertTrue(
+                    all(call.args[0] != target for call in file_hash_mock.mock_calls),
+                    file_hash_mock.mock_calls,
+                )

@@ -86,7 +86,11 @@ def save_cache(root: Path, cache: dict, strip_metadata: bool) -> None:
         logger.warning("Failed to save cache %s: %s", path, e)
 
 
-def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64') -> tuple[Path, str | None]:
+def file_hash(
+    path: Path,
+    strip_metadata: bool = False,
+    algorithm: str = 'xxh64',
+) -> tuple[Path, str | None, str | None]:
     if algorithm == 'xxh64':
         h = xxhash.xxh64()
     elif algorithm == 'blake2b':
@@ -98,7 +102,7 @@ def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64'
             suffix = path.suffix.lower()
             if suffix in UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS:
                 logger.info("skipping raw dedupe for %s", path)
-                return path, None
+                return path, None, 'unsupported_exiftool_extension'
             cmd = ['exiftool', '-all=', '-o', '-', str(path)]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             assert proc.stdout is not None
@@ -113,10 +117,10 @@ def file_hash(path: Path, strip_metadata: bool = False, algorithm: str = 'xxh64'
                     h.update(chunk)
         digest = h.hexdigest()
         logger.debug("Hashed %s with %s -> %s", path, algorithm, digest)
-        return path, digest
+        return path, digest, None
     except Exception as e:
         logger.warning("Hash failed for %s: %s", path, e)
-        return path, None
+        return path, None, str(e)
 
 
 def iter_files(paths, recursive: bool = True):
@@ -200,24 +204,37 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             return path, None
         rel = str(path.relative_to(root))
         digest: str | None = None
+        error: str | None = None
         entry = None
         if use_cache:
             cache = cache_map.get(root, {})
             entry = cache.get(rel)
             if entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                failure = entry.get('xxh64_failed') or entry.get('hash_failed')
+                if failure:
+                    logger.debug("Cache indicates failed xxh64 hash for %s; skipping", path)
+                    return path, None
                 digest = entry.get('xxh64') or entry.get('hash')
                 if digest:
                     logger.debug("Cache hit for %s", path)
         if not digest:
             logger.debug("Hashing %s", path)
-            _, digest = file_hash(path, strip_metadata, 'xxh64')
-            if digest and use_cache:
-                cache_map.setdefault(root, {})[rel] = {
-                    'size': stat.st_size,
-                    'mtime': stat.st_mtime,
-                    'xxh64': digest,
-                    **({'blake2b': entry['blake2b']} if entry and 'blake2b' in entry else {}),
-                }
+            _, digest, error = file_hash(path, strip_metadata, 'xxh64')
+            if use_cache:
+                cache_entry = cache_map.setdefault(root, {}).setdefault(rel, {})
+                cache_entry['size'] = stat.st_size
+                cache_entry['mtime'] = stat.st_mtime
+                if digest:
+                    cache_entry['xxh64'] = digest
+                    cache_entry.pop('xxh64_failed', None)
+                    cache_entry.pop('hash_failed', None)
+                else:
+                    cache_entry.pop('xxh64', None)
+                    cache_entry.pop('hash', None)
+                    if error:
+                        cache_entry['xxh64_failed'] = error
+                    else:
+                        cache_entry['xxh64_failed'] = True
         elif use_cache and entry and 'xxh64' not in entry:
             entry['xxh64'] = digest
         return path, digest
@@ -254,15 +271,24 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                 entry = cache.get(rel) if use_cache else None
                 strong_digest: str | None = None
                 if use_cache and entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                    if entry.get('blake2b_failed'):
+                        logger.debug("Cache indicates failed blake2b hash for %s; skipping", f)
+                        continue
                     strong_digest = entry.get('blake2b')
                 if not strong_digest:
-                    _, strong_digest = file_hash(f, strip_metadata, 'blake2b')
-                    if strong_digest and use_cache:
-                        cache.setdefault(rel, {
+                    _, strong_digest, strong_error = file_hash(f, strip_metadata, 'blake2b')
+                    if use_cache:
+                        cache_entry = cache.setdefault(rel, {
                             'size': stat.st_size,
                             'mtime': stat.st_mtime,
                             'xxh64': entry.get('xxh64') or entry.get('hash') if entry else None,
-                        })['blake2b'] = strong_digest
+                        })
+                        if strong_digest:
+                            cache_entry['blake2b'] = strong_digest
+                            cache_entry.pop('blake2b_failed', None)
+                        elif strong_error:
+                            cache_entry.pop('blake2b', None)
+                            cache_entry['blake2b_failed'] = strong_error
                 if strong_digest:
                     strong_map[strong_digest].append(f)
             for strong_digest, files in strong_map.items():
@@ -289,7 +315,7 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                             logger.info("Would delete %s", f)
                             summary.would_delete.append(f)
                         else:
-                            current_digest = file_hash(f, strip_metadata, 'blake2b')[1]
+                            _, current_digest, _ = file_hash(f, strip_metadata, 'blake2b')
                             if current_digest == strong_digest:
                                 try:
                                     f.unlink()
