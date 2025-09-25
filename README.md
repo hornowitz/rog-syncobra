@@ -38,7 +38,6 @@ To automatically install missing packages run:
 - `-n, --dry-run` – show actions without executing them
 - `-v, --verbose` – enable verbose logging output
 - `--debug` – verbose exiftool output
-- `--exiftool-workers N` – run exiftool with up to `N` parallel workers (default: auto)
 - `-W, --watch` – watch mode; monitor for `CLOSE_WRITE` events
 - `-I, --inputdir DIR` – directory to watch/process (default: current directory)
 - `-g, --grace SECONDS` – seconds to wait after `close_write` (default: 300)
@@ -48,47 +47,14 @@ To automatically install missing packages run:
 - `-F, --dedup-destination-final` – run metadata dedupe on the destination after the
   pipeline finishes moving files
 - `--install-deps` – install required system packages and exit
-- `--photoprism-api-base-url URL`, `--photoprism-api-username USER`,
-  `--photoprism-api-password PASS` – trigger indexing through the Photoprism REST
-  API instead of executing a local command. Optional flags `--photoprism-api-rescan`
-  and `--photoprism-api-cleanup` request a full rescan or cleanup cycle,
-  respectively. Use `--photoprism-api-insecure` to skip TLS verification when
-  working with self-signed certificates. Use `--photoprism-api-strip-prefix`
-  one or more times to remove prefixes (for example host mount points) from
-  paths before they are submitted to the API. Use `--photoprism-api-call [PATH]`
-  to trigger the API manually (defaulting to `/`) and exit without performing
-  any file processing.
-
-### Photoprism index examples
-
-Trigger Photoprism directly for each affected directory:
-
-```bash
-./rog-syncobra.py --photoprism-index-command "photoprism index -f -c {path_q}"
-```
-
-Run indexing inside a Kubernetes-managed Photoprism instance:
-
-```bash
-./rog-syncobra.py --photoprism-index-command \
-  "kubectl exec --stdin --tty -n photoprism pod/photoprism-0 -- photoprism index -f -c {path_q}"
-```
-
-Use the REST API instead of a shell command:
-
-```bash
-./rog-syncobra.py \
-  --photoprism-api-base-url https://photos.example.com \
-  --photoprism-api-username admin \
-  --photoprism-api-password supersecret
-```
 
 ### Photoprism REST watcher
 
 For setups where Photoprism should be reindexed whenever new files appear, a
-dedicated helper script `photoprism-watcher.py` is provided. It watches one or
-more directories and triggers the REST API once changes have settled for a
-configurable grace period:
+dedicated helper script `photoprism-watcher.py` is provided. rog-syncobra
+itself no longer triggers PhotoPrism; use the watcher to keep your library in
+sync. It watches one or more directories and triggers the REST API once changes
+have settled for a configurable grace period:
 
 ```bash
 ./photoprism-watcher.py \
@@ -99,7 +65,7 @@ configurable grace period:
   --photoprism-api-password supersecret
 ```
 
-Additional flags mirror the Photoprism options available in `rog-syncobra.py`:
+Additional flags control how the watcher talks to PhotoPrism:
 
 - `--initial-index` runs an indexing pass for all watched directories before
   entering watch mode.
@@ -157,20 +123,28 @@ sudo systemctl enable --now rog-syncobra@example.service
 Create additional `*.conf` files under `/etc/rog-syncobra/` and start them with
 `systemctl enable --now rog-syncobra@<name>.service` to run multiple instances.
 
-Each configuration file may define `EXTRA_ARGS` to pass additional
-`rog-syncobra.py` options. Provide them exactly as on the command line—for
-example `--verbose` (akin to `verbose=1`), `--dedupsourceanddest`, or
-`--dedup-destination-final`. Options requiring values, such as
-`--archive-dir /srv/archive` or `--photoprism-api-base-url
-https://photos.example.com`, can be combined in the same quoted string:
+Each configuration file may enable features by setting dedicated environment
+variables instead of assembling a single `EXTRA_ARGS` string. Use `1`, `true`,
+`yes`, or `on` to enable a toggle; `0`, `false`, `no`, or `off` disable options
+that provide a "no" variant such as `DELDUPI=0` (which results in
+`--no-deldupi`). Assign literal values to parameters such as `GRACE` or
+`ARCHIVE_DIR`. For example:
 
 ```bash
-EXTRA_ARGS="--verbose --dedupsourceanddest --dedup-destination-final --archive-dir /srv/archive --archive-years 3"
+VERBOSE=1
+DRY_RUN=1
+CHECK_YEAR_MONTH=1
+GRACE=600
+ARCHIVE_DIR=/srv/archive
+DELDUPI=0
 ```
 
-See the comments inside `/etc/rog-syncobra/rog-syncobra.conf.example` for a
-catalogue of common toggles (deduplication, WhatsApp handling, Photoprism API
-integration, etc.) and ready-to-copy combinations.
+This configuration runs rog-syncobra with `--verbose --dry-run
+--check-year-mount --grace 600 --archive-dir /srv/archive --no-deldupi`. Leave
+variables unset to keep their defaults. Setting `SKIP_MARKER=` (an empty value)
+disables skip markers entirely. Legacy deployments using
+`EXTRA_ARGS="..."` continue to work, but the per-variable approach is easier to
+audit at a glance.
 
 ## Logging
 
