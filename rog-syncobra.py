@@ -652,11 +652,7 @@ def exif_sort(src, dest, args):
                     raise RuntimeError('exiftool terminated unexpectedly')
                 stripped = line.strip()
                 lower = stripped.lower()
-                if 'option -echo3' in lower and (
-                    'unrecognized' in lower
-                    or 'unknown' in lower
-                    or 'invalid' in lower
-                ):
+                if 'option -echo3' in lower:
                     raise _StayOpenUnavailable(stripped)
                 if stripped == ready_marker:
                     break
