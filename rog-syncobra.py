@@ -261,7 +261,13 @@ ENV_VALUE_FLAGS: dict[str, dict[str, Union[str, bool]]] = {
 
 
 def _parse_env_bool(value: str) -> Union[bool, None]:
-    lowered = value.strip().lower()
+    stripped = value.strip()
+    hash_index = stripped.find('#')
+    if hash_index != -1:
+        stripped = stripped[:hash_index].rstrip()
+    if stripped == '':
+        return None
+    lowered = stripped.lower()
     if lowered in TRUE_VALUES:
         return True
     if lowered in FALSE_VALUES:
