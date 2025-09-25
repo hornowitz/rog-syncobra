@@ -421,8 +421,29 @@ def check_disk_space(src, dest, dry_run=False):
         du_cmd = ['du','--bytes',excl,'-c',src_abs]
     else:
         du_cmd = ['du','--bytes','-c',src_abs]
-    out = subprocess.check_output(du_cmd).decode()
-    required = int([l for l in out.splitlines() if l.endswith('total')][0].split()[0])
+    try:
+        out = subprocess.check_output(du_cmd, stderr=subprocess.STDOUT).decode()
+    except subprocess.CalledProcessError as exc:
+        output = exc.output.decode(errors='ignore') if isinstance(exc.output, bytes) else str(exc.output)
+        logger.warning(
+            "Could not determine disk usage for %s (exit %s): %s",
+            src_abs,
+            exc.returncode,
+            output.strip(),
+        )
+        return
+
+    try:
+        required = int(
+            [line for line in out.splitlines() if line.endswith('total')][0].split()[0]
+        )
+    except (IndexError, ValueError) as exc:
+        logger.warning(
+            "Unexpected output from du while scanning %s: %s",
+            src_abs,
+            exc,
+        )
+        return
     usage_path = wd_abs
     while not os.path.exists(usage_path):
         parent = os.path.dirname(usage_path)
@@ -599,28 +620,32 @@ def exif_sort(src, dest, args):
         os.chdir(cwd)
         return False
 
-    jobs = []
+    jobs: list[tuple[list[str], Optional[list[str]], Optional[str]]] = []
 
-    def queue(cmd, extra_targets=None):
+    def queue(cmd, extra_targets=None, message=None):
         job_cmd = list(cmd)
         job_targets = list(extra_targets) if extra_targets is not None else None
         logger.debug(
-            "Queued exiftool job: cmd=%s extra_targets=%s",
+            "Queued exiftool job: cmd=%s extra_targets=%s message=%s",
             " ".join(job_cmd),
             job_targets,
+            message,
         )
-        jobs.append((job_cmd, job_targets))
+        jobs.append((job_cmd, job_targets, message))
 
     class _StayOpenUnavailable(RuntimeError):
         """Raised when the stay_open ready marker is not supported."""
 
     def _run_exiftool_oneshot(commands, worker_targets):
         logger.debug("Running exiftool in one-shot mode for %d job(s)", len(commands))
-        for cmd, extra in commands:
+        ran_any_job = False
+        for cmd, extra, message in commands:
             current_targets = extra if extra is not None else worker_targets
             if not current_targets:
                 logger.debug("Skipping exiftool job (no targets): cmd=%s", " ".join(cmd))
                 continue
+            if message:
+                logger.info(message)
             full_cmd = [*cmd, *current_targets]
             logger.info("Exiftool (compat): %s", " ".join(full_cmd))
             proc = subprocess.Popen(
@@ -647,7 +672,9 @@ def exif_sort(src, dest, args):
                 raise RuntimeError(
                     f"exiftool exited with {code} while running: {' '.join(full_cmd)}"
                 )
-        logger.info("Exiftool processing finished")
+            ran_any_job = True
+        if ran_any_job:
+            logger.info("Exiftool processing finished")
 
     def run_worker(_worker_id, worker_targets):
         if not worker_targets:
@@ -706,13 +733,14 @@ def exif_sort(src, dest, args):
                     proc.kill()
                     proc.communicate()
 
+        ran_any_job = False
         try:
             logger.debug("Worker %s sending initial ready probe", _worker_id)
             proc.stdin.write(f"-echo3\n{ready_marker}\n-execute\n")
             proc.stdin.flush()
             _consume_output_until_ready(proc, ready_marker)
 
-            for cmd, extra in jobs:
+            for cmd, extra, message in jobs:
                 current_targets = extra if extra is not None else worker_targets
                 if not current_targets:
                     logger.debug(
@@ -721,6 +749,8 @@ def exif_sort(src, dest, args):
                         " ".join(cmd),
                     )
                     continue
+                if message:
+                    logger.info(message)
                 full_cmd = [*cmd, *current_targets]
                 logger.info("Exiftool: %s", " ".join(full_cmd))
                 payload = "\n".join(full_cmd[1:])
@@ -734,6 +764,7 @@ def exif_sort(src, dest, args):
                 )
                 proc.stdin.flush()
                 _consume_output_until_ready(proc, ready_marker)
+                ran_any_job = True
         except _StayOpenUnavailable as exc:
             logger.warning(
                 "Exiftool does not support -echo3 (%s); falling back to one-shot mode",
@@ -748,28 +779,28 @@ def exif_sort(src, dest, args):
             if proc.poll() is None:
                 _shutdown_process()
 
-        logger.info("Exiftool processing finished")
+        if ran_any_job:
+            logger.info("Exiftool processing finished")
 
     heic_desc = describe_extensions(HEIC_EXTS)
     if heic_present:
-        logger.info("HEIC processing")
         cmd = [
             'exiftool', vflag,
             '-FileName<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext', 'HEIC'
         ]
-        queue(cmd)
+        queue(cmd, message="HEIC processing")
     else:
         logger.info("Skipping HEIC processing (no %s media detected)", heic_desc or 'HEIC')
 
     screenshot_desc = describe_extensions(SCREENSHOT_EXTS)
     if screenshot_present:
-        logger.info("Screenshots tagging")
         base_if = (
             r"$filename=~/screenshot/i or "
             r"$UserComment=~/screenshot/i"
         )
+        first_tagging = True
         for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
                                  ("DateCreated",   "DateCreated")):
             cmd = [
@@ -780,16 +811,16 @@ def exif_sort(src, dest, args):
                 f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
                 '-overwrite_original_in_place','-P','-fast2'
             ]
-            queue(cmd)
+            queue(cmd, message="Screenshots tagging" if first_tagging else None)
+            first_tagging = False
 
-        logger.info("Screenshots rename & move")
         cmd = [
             'exiftool', vflag,
             '-if', '$Keywords=~/screenshot/i',
             '-Filename<${CreateDate} ${Keywords}%-c.%e',
             '-d', "%Y-%m-%d %H-%M-%S"
         ]
-        queue(cmd)
+        queue(cmd, message="Screenshots rename & move")
         cmd = [
             'exiftool', vflag,
             '-if', '$Keywords=~/screenshot/i',
@@ -807,7 +838,16 @@ def exif_sort(src, dest, args):
                 "Skipping WhatsApp processing (no %s media detected)", whatsapp_desc
             )
         else:
-            logger.info("WhatsApp processing")
+            logger.debug("Scheduling WhatsApp processing jobs")
+            whatsapp_logged = False
+
+            def stage_message():
+                nonlocal whatsapp_logged
+                if whatsapp_logged:
+                    return None
+                whatsapp_logged = True
+                return "WhatsApp processing"
+
             blocks = [
                 # WhatsApp Images (JPG)
                 (
@@ -845,7 +885,7 @@ def exif_sort(src, dest, args):
                     '-alldates<20${filename}','-FileModifyDate<20${filename}',
                     '-overwrite_original_in_place','-P','-fast2', *exts
                 ]
-                queue(cmd)
+                queue(cmd, message=stage_message())
 
             cmd = [
                 'exiftool', vflag,
@@ -855,7 +895,7 @@ def exif_sort(src, dest, args):
                 '-overwrite_original_in_place','-P','-fast2',
                 '-ext+','JPG','-ext+','MP4','-ext+','3GP'
             ]
-            queue(cmd)
+            queue(cmd, message=stage_message())
             cmd = [
                 'exiftool', vflag,
                 '-if','$Keywords=~/whatsapp/i',
@@ -863,17 +903,16 @@ def exif_sort(src, dest, args):
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','JPG','-ext+','MP4','-ext+','3GP'
             ]
-            queue(cmd)
+            queue(cmd, message=stage_message())
             cmd = [
                 'exiftool', vflag,
                 '-if','$Keywords=~/whatsapp/i',
                 '-Directory<$CreateDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
             ]
-            queue(cmd)
+            queue(cmd, message=stage_message())
 
     if dcim_present:
-        logger.info("Misc vid processing")
         cmd = [
             'exiftool', vflag,
             '-if', 'not defined $Keywords',
@@ -887,8 +926,7 @@ def exif_sort(src, dest, args):
             '-ext', 'avi',
             '-ext', 'vob',
         ]
-        queue(cmd)
-        logger.info("DCIM processing")
+        queue(cmd, message="Misc vid processing")
         cmd = [
             'exiftool', vflag,
             '-if','not defined $Keywords',
@@ -903,7 +941,7 @@ def exif_sort(src, dest, args):
             '-ext+','mpg','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
             '-ee'
         ]
-        queue(cmd)
+        queue(cmd, message="DCIM processing")
         cmd = [
             'exiftool', vflag,
             '-if','not defined $Keywords and not defined $model;',
@@ -917,10 +955,12 @@ def exif_sort(src, dest, args):
     result = False
     try:
         if args.dry_run:
-            for cmd, extra_targets in jobs:
+            for cmd, extra_targets, message in jobs:
                 target_list = extra_targets if extra_targets is not None else targets
                 if not target_list:
                     continue
+                if message:
+                    logger.info("[DRY] %s", message)
                 full_cmd = [*cmd, *target_list]
                 logger.info("[DRY] " + " ".join(full_cmd))
             return False
