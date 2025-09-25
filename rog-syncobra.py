@@ -602,15 +602,24 @@ def exif_sort(src, dest, args):
     jobs = []
 
     def queue(cmd, extra_targets=None):
-        jobs.append((list(cmd), list(extra_targets) if extra_targets is not None else None))
+        job_cmd = list(cmd)
+        job_targets = list(extra_targets) if extra_targets is not None else None
+        logger.debug(
+            "Queued exiftool job: cmd=%s extra_targets=%s",
+            " ".join(job_cmd),
+            job_targets,
+        )
+        jobs.append((job_cmd, job_targets))
 
     class _StayOpenUnavailable(RuntimeError):
         """Raised when the stay_open ready marker is not supported."""
 
     def _run_exiftool_oneshot(commands, worker_targets):
+        logger.debug("Running exiftool in one-shot mode for %d job(s)", len(commands))
         for cmd, extra in commands:
             current_targets = extra if extra is not None else worker_targets
             if not current_targets:
+                logger.debug("Skipping exiftool job (no targets): cmd=%s", " ".join(cmd))
                 continue
             full_cmd = [*cmd, *current_targets]
             logger.info("Exiftool (compat): %s", " ".join(full_cmd))
@@ -646,6 +655,9 @@ def exif_sort(src, dest, args):
             return
 
         def _consume_output_until_ready(proc, ready_marker):
+            logger.debug(
+                "Waiting for exiftool ready marker '%s'", ready_marker
+            )
             while True:
                 line = proc.stdout.readline()
                 if not line:
@@ -655,6 +667,7 @@ def exif_sort(src, dest, args):
                 if 'option -echo3' in lower:
                     raise _StayOpenUnavailable(stripped)
                 if stripped == ready_marker:
+                    logger.debug("Received ready marker '%s'", ready_marker)
                     break
                 if lower.startswith('error'):
                     logger.error("Exiftool: %s", stripped)
@@ -667,6 +680,7 @@ def exif_sort(src, dest, args):
             "Starting exiftool processing for %d target(s)",
             len(worker_targets),
         )
+        logger.debug("Worker %s launching stay-open exiftool", _worker_id)
         proc = subprocess.Popen(
             ['exiftool', '-stay_open', 'True', '-@', '-'],
             stdin=subprocess.PIPE,
@@ -693,6 +707,7 @@ def exif_sort(src, dest, args):
                     proc.communicate()
 
         try:
+            logger.debug("Worker %s sending initial ready probe", _worker_id)
             proc.stdin.write(f"-echo3\n{ready_marker}\n-execute\n")
             proc.stdin.flush()
             _consume_output_until_ready(proc, ready_marker)
@@ -700,10 +715,20 @@ def exif_sort(src, dest, args):
             for cmd, extra in jobs:
                 current_targets = extra if extra is not None else worker_targets
                 if not current_targets:
+                    logger.debug(
+                        "Worker %s skipping job (no targets): cmd=%s",
+                        _worker_id,
+                        " ".join(cmd),
+                    )
                     continue
                 full_cmd = [*cmd, *current_targets]
                 logger.info("Exiftool: %s", " ".join(full_cmd))
                 payload = "\n".join(full_cmd[1:])
+                logger.debug(
+                    "Worker %s sending payload to exiftool: %s",
+                    _worker_id,
+                    payload.replace("\n", " | "),
+                )
                 proc.stdin.write(
                     f"{payload}\n-echo3\n{ready_marker}\n-execute\n"
                 )
