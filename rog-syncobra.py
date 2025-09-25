@@ -367,8 +367,8 @@ def parse_args():
                    help="Enable verbose logging output")
     p.add_argument('-W','--watch', action='store_true',
                    help="Watch mode: monitor for CLOSE_WRITE events")
-    p.add_argument('-I','--inputdir', default=os.getcwd(),
-                   help="Directory to watch/process (default cwd)")
+    p.add_argument('-I','--inputdir', dest='inputdirs', action='append',
+                   help="Directory to watch/process (can be provided multiple times; default cwd)")
     p.add_argument('-g','--grace', type=int, default=300,
                    help="Seconds to wait after close_write (default 300)")
     p.add_argument('--archive-dir', default='',
@@ -391,6 +391,9 @@ def parse_args():
     extra = [e for e in extra if e != '-']
     if extra:
         p.error(f"unrecognized arguments: {' '.join(extra)}")
+    if not args.inputdirs:
+        args.inputdirs = [os.getcwd()]
+
     return args
 
 def safe_run(cmd, dry_run=False):
@@ -1045,8 +1048,8 @@ def archive_old(src, archive_dir, years, dry_run=False):
             logger.info(f"Archived: {src_path} → {dest_path}")
 
 
-def pipeline(args):
-    src = os.path.expanduser(args.inputdir)
+def pipeline(args, src):
+    src = os.path.expanduser(src)
     dest_root = args.move2targetdir or src
     dest = os.path.expanduser(dest_root).rstrip('/') or '/'
     src_abs = _expand_path(src)
@@ -1091,18 +1094,23 @@ def main():
         return
     for cmd in ('exiftool','xxhsum','sort','du','df'):
         check_program(cmd)
+    inputdirs = [_expand_path(path) for path in args.inputdirs]
+
     if args.watch:
         check_program('inotifywait')
-        args.inputdir = _expand_path(args.inputdir)
-        pipeline(args)
-        logger.info(f"Entering watch mode on {args.inputdir}")
+        for src in inputdirs:
+            pipeline(args, src)
+        joined = ", ".join(inputdirs)
+        logger.info(f"Entering watch mode on {joined}")
         while True:
-            subprocess.run(['inotifywait','-e','close_write','-r', args.inputdir])
+            subprocess.run(['inotifywait','-e','close_write','-r', *inputdirs])
             logger.info(f"Sleeping {args.grace}s before processing")
             time.sleep(args.grace)
-            pipeline(args)
+            for src in inputdirs:
+                pipeline(args, src)
     else:
-        pipeline(args)
+        for src in inputdirs:
+            pipeline(args, src)
 
 if __name__ == '__main__':
     main()
