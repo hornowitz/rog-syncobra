@@ -348,6 +348,7 @@ def main():
     p.add_argument('-t', '--threads', type=int, default=os.cpu_count() or 1,
                    help="Worker threads")
     p.add_argument('-l', '--log-level', default='INFO', help="Logging level")
+    p.add_argument('-v', '--verbose', action='store_true', help="Enable verbose (DEBUG) logging")
     p.add_argument('-p', '--no-progress', action='store_true', help="Disable progress bar")
     p.add_argument('-s', '--strip-metadata', action='store_true',
                    help="Hash file content with metadata removed")
@@ -359,8 +360,13 @@ def main():
                    help="Restrict deletions to files under the specified directory")
     args = p.parse_args()
 
-    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
-                        format='%(levelname)s: %(message)s')
+    if args.verbose:
+        level = logging.DEBUG
+    else:
+        level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=level, format='%(levelname)s: %(message)s')
+    if args.verbose:
+        logger.debug("Verbose logging enabled")
 
     summary: DuplicateSummary | None = None
     try:
