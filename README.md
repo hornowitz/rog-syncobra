@@ -25,11 +25,13 @@ To automatically install missing packages run:
 ## Options
 
 - `-r, --recursive` – recurse into subdirectories
-- `-d, --ddwometadata` – raw dedupe by XXH64 between source and destination
-- `-D, --deldupi` – force metadata dedupe on source (runs before `--ddwometadata`; now
-  enabled by default)
-- `-X, --dedupsourceanddest` – force metadata dedupe on source and compare against the
-  destination before moving files (now the default when a destination is provided)
+- `-d, --raw-dedupe` – raw dedupe by XXH64 between source and destination (legacy
+  alias: `--ddwometadata`)
+- `-D, --metadata-dedupe-source` – force metadata dedupe on source (runs before
+  `--raw-dedupe`; legacy alias: `--deldupi`; enabled by default)
+- `-X, --metadata-dedupe-source-dest` – force metadata dedupe on source and compare
+  against the destination before moving files (legacy alias: `--dedupsourceanddest`;
+  now the default when a destination is provided)
 - `-y, --year-month-sort` – sort into `Year/Month` directories (default on)
 - `-Y, --check-year-mount` – verify that the current year's folder under the
   destination exists and is a mountpoint
@@ -45,8 +47,8 @@ To automatically install missing packages run:
 - `--archive-dir DIR` – directory to archive old files to
 - `--archive-years YEARS` – move directories older than this many years (default: 2)
 - `--skip-marker NAME` – skip directories that contain `NAME` (default: `.rog-syncobraignore`; set to an empty string to disable)
-- `-F, --dedup-destination-final` – run metadata dedupe on the destination after the
-  pipeline finishes moving files
+- `-F, --metadata-dedupe-destination-final` – run metadata dedupe on the destination
+  after the pipeline finishes moving files (legacy alias: `--dedup-destination-final`)
 - `--install-deps` – install required system packages and exit
 
 ### Photoprism REST watcher
@@ -127,9 +129,9 @@ Create additional `*.conf` files under `/etc/rog-syncobra/` and start them with
 Each configuration file may enable features by setting dedicated environment
 variables instead of assembling a single `EXTRA_ARGS` string. Use `1`, `true`,
 `yes`, or `on` to enable a toggle; `0`, `false`, `no`, or `off` disable options
-that provide a "no" variant such as `DELDUPI=0` (which results in
-`--no-deldupi`). Assign literal values to parameters such as `GRACE` or
-`ARCHIVE_DIR`. For example:
+that provide a "no" variant such as `METADATA_DEDUPE_SOURCE=0` (legacy
+deployments may still use `DELDUPI=0`). Assign literal values to parameters
+such as `GRACE` or `ARCHIVE_DIR`. For example:
 
 ```bash
 VERBOSE=1
@@ -138,11 +140,11 @@ CHECK_YEAR_MONTH=1
 GRACE=600
 ARCHIVE_DIR=/srv/archive
 MIN_AGE_DAYS=30
-DELDUPI=0
+METADATA_DEDUPE_SOURCE=0
 ```
 
 This configuration runs rog-syncobra with `--verbose --dry-run
---check-year-mount --grace 600 --min-age-days 30 --archive-dir /srv/archive --no-deldupi`. Leave
+--check-year-mount --grace 600 --min-age-days 30 --archive-dir /srv/archive --no-metadata-dedupe-source`. Leave
 variables unset to keep their defaults. Setting `SKIP_MARKER=` (an empty value)
 disables skip markers entirely. Legacy deployments using
 `EXTRA_ARGS="..."` continue to work, but the per-variable approach is easier to

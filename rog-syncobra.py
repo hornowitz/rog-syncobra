@@ -237,18 +237,31 @@ ENV_BOOL_FLAGS: dict[str, str] = {
     'WATCH': '--watch',
     'RECURSIVE': '--recursive',
     'WHATSAPP': '--whatsapp',
-    'DDWOMETADATA': '--ddwometadata',
+    'DDWOMETADATA': '--raw-dedupe',
+    'RAW_DEDUPE': '--raw-dedupe',
     'YEAR_MONTH_SORT': '--year-month-sort',
     'CHECK_YEAR_MOUNT': '--check-year-mount',
     'CHECK_YEAR_MONTH': '--check-year-mount',
-    'DEDUP_DESTINATION_FINAL': '--dedup-destination-final',
+    'DEDUP_DESTINATION_FINAL': '--metadata-dedupe-destination-final',
+    'METADATA_DEDUPE_DESTINATION_FINAL': '--metadata-dedupe-destination-final',
 }
 
 ENV_TOGGLE_FLAGS: dict[str, tuple[str, str]] = {
-    'DELDUPI': ('--deldupi', '--no-deldupi'),
+    'DELDUPI': (
+        '--metadata-dedupe-source',
+        '--no-metadata-dedupe-source',
+    ),
+    'METADATA_DEDUPE_SOURCE': (
+        '--metadata-dedupe-source',
+        '--no-metadata-dedupe-source',
+    ),
     'DEDUPSOURCEANDDEST': (
-        '--dedupsourceanddest',
-        '--no-dedupsourceanddest',
+        '--metadata-dedupe-source-dest',
+        '--no-metadata-dedupe-source-dest',
+    ),
+    'METADATA_DEDUPE_SOURCE_DEST': (
+        '--metadata-dedupe-source-dest',
+        '--no-metadata-dedupe-source-dest',
     ),
 }
 
@@ -342,15 +355,15 @@ def _inject_env_cli_args() -> None:
 def parse_args():
     p = argparse.ArgumentParser(description="rog-syncobra: sort & dedupe media")
     p.add_argument('-r','--recursive', action='store_true', help="Recurse subdirectories")
-    p.add_argument('-d','--ddwometadata', action='store_true',
+    p.add_argument('-d','--raw-dedupe','--ddwometadata', dest='raw_dedupe', action='store_true',
                    help="Raw dedupe by data (XXH64) between source & dest")
-    p.add_argument('-D','--deldupi', dest='deldupi', action='store_true', default=True,
-                   help="Force metadata dedupe on source (use --no-deldupi to skip)")
-    p.add_argument('--no-deldupi', dest='deldupi', action='store_false',
+    p.add_argument('-D','--metadata-dedupe-source','--deldupi', dest='metadata_dedupe_source', action='store_true', default=True,
+                   help="Force metadata dedupe on source (use --no-metadata-dedupe-source to skip)")
+    p.add_argument('--no-metadata-dedupe-source','--no-deldupi', dest='metadata_dedupe_source', action='store_false',
                    help="Skip metadata dedupe on source before processing")
-    p.add_argument('-X','--dedupsourceanddest', dest='dedupsourceanddest', action='store_true', default=None,
-                   help="Force metadata dedupe on source and destination pre-move (auto unless disabled)")
-    p.add_argument('--no-dedupsourceanddest', dest='dedupsourceanddest', action='store_false',
+    p.add_argument('-X','--metadata-dedupe-source-dest','--dedupsourceanddest', dest='metadata_dedupe_source_dest', action='store_true', default=None,
+                   help="Force metadata dedupe between source and destination pre-move (auto unless disabled)")
+    p.add_argument('--no-metadata-dedupe-source-dest','--no-dedupsourceanddest', dest='metadata_dedupe_source_dest', action='store_false',
                    help="Skip metadata dedupe between source and destination before processing")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
@@ -380,7 +393,7 @@ def parse_args():
                    help="Move directories older than this many years (default 2)")
     p.add_argument('--skip-marker', default='.rog-syncobraignore',
                    help="Filename that marks directories to skip (set to '' to disable)")
-    p.add_argument('-F','--dedup-destination-final', action='store_true',
+    p.add_argument('-F','--metadata-dedupe-destination-final','--dedup-destination-final', dest='metadata_dedupe_destination_final', action='store_true',
                    help="Run metadata dedupe on destination after processing completes")
     p.add_argument('--install-deps', action='store_true',
                    help="Install required system packages and exit")
@@ -509,9 +522,11 @@ def metadata_dedupe_source_against_dest(src, dest, dry_run=False):
     src_abs = _expand_path(src)
     dest_abs = _expand_path(dest)
     prefix = "[DRY] " if dry_run else ""
-    logger.info(
-        f"{prefix}Metadata dedupe via xxrdfind between destination ({dest_abs}) and source ({src_abs}); deleting duplicates from source"
+    message = (
+        f"{prefix}Metadata dedupe via xxrdfind between destination ({dest_abs}) "
+        f"and source ({src_abs}); deleting duplicates from source"
     )
+    logger.info(message)
     xxrdfind_dedupe(
         [dest_abs, src_abs],
         dry_run=dry_run,
@@ -1131,17 +1146,17 @@ def pipeline(args, src):
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
     # Optionally dedupe the source first to ensure we work with a clean input set.
-    if args.deldupi:
+    if args.metadata_dedupe_source:
         metadata_dedupe(src, args.dry_run)
 
     # When a distinct destination is provided (or explicitly requested),
     # also dedupe source against destination by default unless disabled.
-    dedupe_src_dest = args.dedupsourceanddest
+    dedupe_src_dest = args.metadata_dedupe_source_dest
     if dedupe_src_dest is None:
         dedupe_src_dest = dest_is_distinct
     if dedupe_src_dest and dest_abs != src_abs:
         metadata_dedupe_source_against_dest(src, dest, args.dry_run)
-    if args.ddwometadata:
+    if args.raw_dedupe:
         raw_dedupe(src, dest, args.dry_run)
     exif_changed = exif_sort(src, dest, args)
     if args.archive_dir:
@@ -1150,7 +1165,7 @@ def pipeline(args, src):
                     args.archive_years,
                     args.dry_run)
 
-    if args.dedup_destination_final and dest_is_distinct:
+    if args.metadata_dedupe_destination_final and dest_is_distinct:
         metadata_dedupe(dest, args.dry_run)
 
     operation_tracker.log_summary()
