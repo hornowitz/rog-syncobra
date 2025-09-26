@@ -7,6 +7,8 @@ import logging
 import argparse
 import shlex
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -193,7 +195,15 @@ class OperationTracker:
             logger.info("Moved files: none")
 
 
-operation_tracker = OperationTracker()
+_operation_tracker_state = threading.local()
+
+
+def get_operation_tracker() -> OperationTracker:
+    tracker = getattr(_operation_tracker_state, 'tracker', None)
+    if tracker is None:
+        tracker = OperationTracker()
+        _operation_tracker_state.tracker = tracker
+    return tracker
 
 def check_program(name):
     if not shutil.which(name):
@@ -225,6 +235,15 @@ def set_logging_verbosity(enable_debug: bool) -> None:
     logger.setLevel(level)
     for handler in LOG_HANDLERS:
         handler.setLevel(level)
+
+    # Mirror the verbosity settings onto the xxrdfind logger so that
+    # dedupe operations provide matching detail when verbose/debug is enabled.
+    xx_logger = logging.getLogger('xxrdfind')
+    xx_logger.setLevel(level)
+    xx_logger.propagate = False
+    for handler in LOG_HANDLERS:
+        if handler not in xx_logger.handlers:
+            xx_logger.addHandler(handler)
 
 
 TRUE_VALUES = {'1', 'true', 'yes', 'on'}
@@ -508,7 +527,8 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
         strip_metadata=strip_metadata,
         delete_roots=delete_roots,
     )
-    operation_tracker.record_deleted(summary.deleted)
+    tracker = get_operation_tracker()
+    tracker.record_deleted(summary.deleted)
     return summary
 
 
@@ -1129,7 +1149,8 @@ def archive_old(src, archive_dir, years, dry_run=False):
         else:
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             shutil.move(src_path, dest_path)
-            operation_tracker.record_moved(Path(src_path), Path(dest_path))
+            tracker = get_operation_tracker()
+            tracker.record_moved(Path(src_path), Path(dest_path))
             logger.info(f"Archived: {src_path} → {dest_path}")
 
 
@@ -1141,7 +1162,8 @@ def pipeline(args, src):
     dest_abs = _expand_path(dest)
     dest_specified = bool(args.move2targetdir)
     dest_is_distinct = dest_specified and dest_abs != src_abs
-    operation_tracker.reset()
+    tracker = get_operation_tracker()
+    tracker.reset()
     if args.check_year_mount and args.year_month_sort:
         check_year_mount(dest)
     check_disk_space(src, dest, args.dry_run)
@@ -1168,7 +1190,47 @@ def pipeline(args, src):
     if args.metadata_dedupe_destination_final and dest_is_distinct:
         metadata_dedupe(dest, args.dry_run)
 
-    operation_tracker.log_summary()
+    tracker.log_summary()
+
+
+def _run_pipelines(args, sources):
+    if not sources:
+        return
+    if len(sources) == 1:
+        pipeline(args, sources[0])
+        return
+
+    max_workers = min(len(sources), os.cpu_count() or len(sources))
+    logger.info(
+        "Processing %d input directories in parallel with %d workers",
+        len(sources),
+        max_workers,
+    )
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_src = {executor.submit(pipeline, args, src): src for src in sources}
+        for future in as_completed(future_to_src):
+            src = future_to_src[future]
+            try:
+                future.result()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("Pipeline for %s failed: %s", src, exc)
+
+
+def _wait_for_change(inputdirs):
+    format_str = '%w%f|%e'
+    cmd = ['inotifywait', '-r', '-e', 'close_write', '--format', format_str, *inputdirs]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        logger.error("inotifywait exited with status %s: %s", exc.returncode, exc)
+        return None
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+    raw_path, _, events = lines[-1].partition('|')
+    event_path = _expand_path(raw_path)
+    logger.debug("inotifywait reported %s (%s)", event_path, events or 'no events')
+    return event_path
 
 def main():
     _inject_env_cli_args()
@@ -1183,19 +1245,33 @@ def main():
 
     if args.watch:
         check_program('inotifywait')
-        for src in inputdirs:
-            pipeline(args, src)
+        _run_pipelines(args, inputdirs)
         joined = ", ".join(inputdirs)
         logger.info(f"Entering watch mode on {joined}")
         while True:
-            subprocess.run(['inotifywait','-e','close_write','-r', *inputdirs])
-            logger.info(f"Sleeping {args.grace}s before processing")
+            event_path = _wait_for_change(inputdirs)
+            if event_path is None:
+                logger.info("No path detected from watcher; re-arming")
+                continue
+            matching = [src for src in inputdirs if event_path == src or event_path.startswith(f"{src}{os.sep}")]
+            if matching:
+                joined_match = ", ".join(matching)
+                logger.info(
+                    "Detected close_write under %s; sleeping %ds before processing",
+                    joined_match,
+                    args.grace,
+                )
+            else:
+                logger.info(
+                    "Detected change at %s outside configured roots; sleeping %ds before processing",
+                    event_path,
+                    args.grace,
+                )
+                matching = inputdirs
             time.sleep(args.grace)
-            for src in inputdirs:
-                pipeline(args, src)
+            _run_pipelines(args, matching)
     else:
-        for src in inputdirs:
-            pipeline(args, src)
+        _run_pipelines(args, inputdirs)
 
 if __name__ == '__main__':
     main()
