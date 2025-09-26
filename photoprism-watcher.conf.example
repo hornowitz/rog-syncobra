@@ -5,6 +5,8 @@
 
 # Directory tree to watch for new media (expects YYYY/MM subdirectories)
 WATCH_DIR=/srv/media/library/originals
+# To watch multiple trees, set WATCH_DIRS to a colon-separated list, e.g.:
+# WATCH_DIRS=/srv/media/library/originals:/srv/media/archive/originals
 
 # Root of the PhotoPrism originals library that should be indexed
 DEST_ROOT=/srv/media/library/originals

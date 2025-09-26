@@ -67,7 +67,7 @@ _normalize_pp_base_url = MODULE._normalize_pp_base_url
 class MonthEventHandlerTest(unittest.TestCase):
     def test_month_key_returns_year_month(self):
         cfg = Config(
-            watch_dir="/root/watch",
+            watch_dirs=("/root/watch",),
             dest_root="/dest",
             pp_base_url="http://example",
         )
@@ -78,11 +78,24 @@ class MonthEventHandlerTest(unittest.TestCase):
             "2025/08",
         )
 
+    def test_month_key_supports_multiple_roots(self):
+        cfg = Config(
+            watch_dirs=("/root/watch", "/mnt/photos"),
+            dest_root="/dest",
+            pp_base_url="http://example",
+        )
+        handler = MonthEventHandler(cfg, queue.Queue())
+
+        self.assertEqual(
+            handler._month_key("/mnt/photos/2023/12/img.png"),
+            "2023/12",
+        )
+
 
 class HelpersTest(unittest.TestCase):
     def test_normalizes_base_url_without_api_suffix(self):
         cfg = Config(
-            watch_dir="/root/watch",
+            watch_dirs=("/root/watch",),
             dest_root="/dest",
             pp_base_url="http://photos.example.org",
         )
