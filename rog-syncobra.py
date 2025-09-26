@@ -443,42 +443,59 @@ def safe_run(cmd, dry_run=False):
         logger.warning(f"Command failed ({e.returncode}), continuing...")
 
 def check_disk_space(src, dest, dry_run=False):
-    src_abs = os.path.realpath(src)
-    wd_abs  = os.path.realpath(dest or src)
+    if isinstance(src, (str, bytes, os.PathLike)):
+        sources = [src]
+    elif isinstance(src, Sequence):
+        sources = list(src)
+    else:
+        sources = [src]
 
-    if src_abs == wd_abs:
+    if not sources:
+        return
+
+    wd_abs = os.path.realpath(dest or sources[0])
+    src_abs_paths = [os.path.realpath(path) for path in sources]
+
+    if all(src_abs == wd_abs for src_abs in src_abs_paths):
         logger.info("Source and destination identical; skipping disk space check")
         return
 
-    logger.info(f"Checking disk space under {src_abs}")
-    if wd_abs.startswith(src_abs):
-        excl = f"--exclude={wd_abs}/*"
-        du_cmd = ['du','--bytes',excl,'-c',src_abs]
-    else:
-        du_cmd = ['du','--bytes','-c',src_abs]
-    try:
-        out = subprocess.check_output(du_cmd, stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as exc:
-        output = exc.output.decode(errors='ignore') if isinstance(exc.output, bytes) else str(exc.output)
-        logger.warning(
-            "Could not determine disk usage for %s (exit %s): %s",
-            src_abs,
-            exc.returncode,
-            output.strip(),
-        )
+    total_required = 0
+    for src_abs in src_abs_paths:
+        logger.info(f"Checking disk space under {src_abs}")
+        if wd_abs.startswith(src_abs):
+            excl = f"--exclude={wd_abs}/*"
+            du_cmd = ['du', '--bytes', excl, '-c', src_abs]
+        else:
+            du_cmd = ['du', '--bytes', '-c', src_abs]
+        try:
+            out = subprocess.check_output(du_cmd, stderr=subprocess.STDOUT).decode()
+        except subprocess.CalledProcessError as exc:
+            output = exc.output.decode(errors='ignore') if isinstance(exc.output, bytes) else str(exc.output)
+            logger.warning(
+                "Could not determine disk usage for %s (exit %s): %s",
+                src_abs,
+                exc.returncode,
+                output.strip(),
+            )
+            continue
+
+        try:
+            required = int(
+                [line for line in out.splitlines() if line.endswith('total')][0].split()[0]
+            )
+        except (IndexError, ValueError) as exc:
+            logger.warning(
+                "Unexpected output from du while scanning %s: %s",
+                src_abs,
+                exc,
+            )
+            continue
+        total_required += required
+
+    if not total_required:
         return
 
-    try:
-        required = int(
-            [line for line in out.splitlines() if line.endswith('total')][0].split()[0]
-        )
-    except (IndexError, ValueError) as exc:
-        logger.warning(
-            "Unexpected output from du while scanning %s: %s",
-            src_abs,
-            exc,
-        )
-        return
     usage_path = wd_abs
     while not os.path.exists(usage_path):
         parent = os.path.dirname(usage_path)
@@ -487,9 +504,11 @@ def check_disk_space(src, dest, dry_run=False):
         usage_path = parent
     stat = shutil.disk_usage(usage_path)
     avail = stat.free
-    logger.info(f"Required: {required} B ({required/1024/1024:.2f} MB), "
-                f"Available: {avail} B ({avail/1024/1024:.2f} MB)")
-    if not dry_run and avail < required:
+    logger.info(
+        f"Required: {total_required} B ({total_required/1024/1024:.2f} MB), "
+        f"Available: {avail} B ({avail/1024/1024:.2f} MB)"
+    )
+    if not dry_run and avail < total_required:
         logger.error("Not enough space, aborting")
         sys.exit(1)
 
@@ -1196,6 +1215,9 @@ def pipeline(args, src):
 def _run_pipelines(args, sources):
     if not sources:
         return
+    if len(sources) > 1 and args.move2targetdir:
+        dest_root = os.path.expanduser(args.move2targetdir).rstrip('/') or '/'
+        check_disk_space(sources, dest_root, args.dry_run)
     if len(sources) == 1:
         pipeline(args, sources[0])
         return
