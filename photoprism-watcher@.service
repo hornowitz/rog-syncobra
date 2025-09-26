@@ -6,9 +6,21 @@ After=network.target
 Type=simple
 EnvironmentFile=/etc/rog-syncobra/photoprism-watcher-%i.conf
 ExecStart=/usr/bin/env bash -c "set -euo pipefail; \
-  ARGS=(/usr/bin/env python3 /usr/local/bin/photoprism-watcher.py \
-    --watch-dir \"$${WATCH_DIR:?Set WATCH_DIR in /etc/rog-syncobra/photoprism-watcher-%i.conf}\" \
-    --dest-root \"$${DEST_ROOT:?Set DEST_ROOT in /etc/rog-syncobra/photoprism-watcher-%i.conf}\" \
+  ARGS=(/usr/bin/env python3 /usr/local/bin/photoprism-watcher.py); \
+  if [[ -n \"$${WATCH_DIRS:-}\" ]]; then \
+    IFS=':' read -r -a _watch_dirs <<< \"$${WATCH_DIRS}\"; \
+  elif [[ -n \"$${WATCH_DIR:-}\" ]]; then \
+    _watch_dirs=(\"$${WATCH_DIR}\"); \
+  else \
+    echo 'WATCH_DIR or WATCH_DIRS must be set in /etc/rog-syncobra/photoprism-watcher-%i.conf' >&2; \
+    exit 1; \
+  fi; \
+  for _dir in \"$${_watch_dirs[@]}\"; do \
+    if [[ -n \"$${_dir}\" ]]; then \
+      ARGS+=(--watch-dir \"$${_dir}\"); \
+    fi; \
+  done; \
+  ARGS+=(--dest-root \"$${DEST_ROOT:?Set DEST_ROOT in /etc/rog-syncobra/photoprism-watcher-%i.conf}\" \
     --pp-base-url \"$${PHOTOPRISM_API_BASE_URL:?Set PHOTOPRISM_API_BASE_URL in /etc/rog-syncobra/photoprism-watcher-%i.conf}\"\
   ); \
   if [[ -n \"$${PHOTOPRISM_API_USERNAME:-}\" ]]; then \

@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
 
 import requests
 from watchdog.events import (
@@ -79,7 +79,7 @@ def _normalize_pp_base_url(base_url: str) -> str:
 class Config:
     """Runtime configuration for the watcher."""
 
-    watch_dir: str
+    watch_dirs: Tuple[str, ...]
     dest_root: str
     pp_base_url: str
     pp_user: Optional[str] = None
@@ -93,6 +93,16 @@ class Config:
 
     def __post_init__(self) -> None:
         self.pp_base_url = _normalize_pp_base_url(self.pp_base_url)
+        normalized: list[str] = []
+        seen = set()
+        for raw in self.watch_dirs:
+            path = os.path.abspath(raw)
+            if path not in seen:
+                normalized.append(path)
+                seen.add(path)
+        if not normalized:
+            raise ValueError("At least one watch directory must be provided")
+        self.watch_dirs = tuple(normalized)
 
 
 def verbose_print(cfg: Config, message: str) -> None:
@@ -212,7 +222,7 @@ class MonthEventHandler(FileSystemEventHandler):
         super().__init__()
         self.cfg = cfg
         self.out_q = out_queue
-        self.src_root = os.path.abspath(cfg.watch_dir)
+        self.src_roots = cfg.watch_dirs
 
     def _is_tmp(self, name: str) -> bool:
         return any(pattern.search(name) for pattern in TMP_RE)
@@ -221,16 +231,25 @@ class MonthEventHandler(FileSystemEventHandler):
         return os.path.splitext(path)[1].lower() in MEDIA_EXT
 
     def _month_key(self, abs_path: str) -> Optional[str]:
-        try:
-            rel = os.path.relpath(abs_path, self.src_root)
-        except ValueError:
-            return None
-        match = MONTH_RE.match(rel)
-        if not match:
-            return None
-        year = match.group("year")
-        month = match.group("month")
-        return f"{year}/{month}"
+        candidate = os.path.abspath(abs_path)
+        for root in self.src_roots:
+            try:
+                common = os.path.commonpath([candidate, root])
+            except ValueError:
+                continue
+            if common != root:
+                continue
+            try:
+                rel = os.path.relpath(candidate, root)
+            except ValueError:
+                continue
+            match = MONTH_RE.match(rel)
+            if not match:
+                continue
+            year = match.group("year")
+            month = match.group("month")
+            return f"{year}/{month}"
+        return None
 
     def _maybe_enqueue(self, path: str) -> None:
         name = os.path.basename(path)
@@ -321,8 +340,10 @@ def parse_args() -> Config:
     )
     parser.add_argument(
         '--watch-dir',
+        dest='watch_dirs',
+        action='append',
         required=True,
-        help='Source root to watch, e.g., /rogaliki/obrazy',
+        help='Source root(s) to watch, repeat or use pathsep-delimited list',
     )
     parser.add_argument(
         '--dest-root',
@@ -368,8 +389,15 @@ def parse_args() -> Config:
     )
 
     args = parser.parse_args()
+    raw_watch_dirs: list[str] = []
+    for value in args.watch_dirs:
+        for part in value.split(os.pathsep):
+            part = part.strip()
+            if part:
+                raw_watch_dirs.append(part)
+
     return Config(
-        watch_dir=args.watch_dir,
+        watch_dirs=tuple(raw_watch_dirs),
         dest_root=args.dest_root,
         pp_base_url=args.pp_base_url,
         pp_user=args.pp_user,
@@ -386,8 +414,12 @@ def parse_args() -> Config:
 def main() -> None:
     cfg = parse_args()
 
-    if not os.path.isdir(cfg.watch_dir):
-        print(f"ERROR: watch dir not found: {cfg.watch_dir}", file=sys.stderr)
+    missing = [path for path in cfg.watch_dirs if not os.path.isdir(path)]
+    if missing:
+        print(
+            "ERROR: watch dir(s) not found: " + ", ".join(sorted(missing)),
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     client = PhotoPrismClient(cfg)
@@ -396,7 +428,8 @@ def main() -> None:
     handler = MonthEventHandler(cfg, q)
 
     observer = Observer()
-    observer.schedule(handler, path=cfg.watch_dir, recursive=True)
+    for watch_dir in cfg.watch_dirs:
+        observer.schedule(handler, path=watch_dir, recursive=True)
 
     stop_event = threading.Event()
 
@@ -409,8 +442,9 @@ def main() -> None:
     signal.signal(signal.SIGTERM, handle_sig)
 
     observer.start()
+    watches = ", ".join(cfg.watch_dirs)
     print(
-        f"Watching: {cfg.watch_dir} -> index under {cfg.dest_root} "
+        f"Watching: {watches} -> index under {cfg.dest_root} "
         f"(PhotoPrism {cfg.pp_base_url})",
     )
     verbose_print(

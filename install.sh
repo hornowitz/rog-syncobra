@@ -194,12 +194,19 @@ echo
 if [[ $DRY_RUN -eq 1 ]]; then
     echo "Dry-run complete. No changes were made."
 else
-    systemctl daemon-reload
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl daemon-reload; then
+            echo "systemd daemon reloaded."
+        else
+            echo "Warning: systemctl daemon-reload failed" >&2
+        fi
+    else
+        echo "systemctl not found; skipping daemon reload."
+    fi
     cat <<EOM
 Installation complete.
 Next steps:
-  1. Run 'systemctl daemon-reload'.
-  2. Copy $CONFIG_DIR/rog-syncobra.conf.example to $CONFIG_DIR/<name>.conf and adjust paths.
-  3. Enable the service with 'systemctl enable --now rog-syncobra@<name>.service'.
+  1. Copy $CONFIG_DIR/rog-syncobra.conf.example to $CONFIG_DIR/<name>.conf and adjust paths.
+  2. Enable the service with 'systemctl enable --now rog-syncobra@<name>.service'.
 EOM
 fi
