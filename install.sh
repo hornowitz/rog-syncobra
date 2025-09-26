@@ -87,9 +87,14 @@ create_config_example() {
 
 # Directory to watch for new media files
 INPUTDIR=/srv/media/incoming
+# To watch multiple directories provide a colon-separated list via INPUTDIRS, e.g.:
+# INPUTDIRS=/srv/media/incoming:/srv/media/phone-uploads
 
 # Destination directory for sorted files
 DESTDIR=/srv/media/library
+
+# Optional log file override (defaults to /var/log/rog-syncobra/rog-syncobra-<instance>.log)
+# ROG_SYNCOBRA_LOGFILE=/var/log/rog-syncobra/rog-syncobra-example.log
 
 # Optional feature toggles understood by rog-syncobra.py.
 #

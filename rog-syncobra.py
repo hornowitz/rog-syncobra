@@ -113,15 +113,28 @@ def has_matching_media(found_exts, candidates):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
-LOGFILE = '/var/log/rog-syncobra/rog-syncobra.log'
+DEFAULT_LOGFILE = '/var/log/rog-syncobra/rog-syncobra.log'
+
+def _resolve_logfile() -> Optional[str]:
+    raw = os.environ.get('ROG_SYNCOBRA_LOGFILE')
+    if raw is None:
+        return DEFAULT_LOGFILE
+    candidate = raw.strip()
+    if not candidate:
+        return None
+    return _expand_path(candidate)
+
+
+LOGFILE = _resolve_logfile()
 #────────────────────────────────────────────────────────────────────────────────
 
 # ─── Logging setup ─────────────────────────────────────────────────────────────
-logdir = os.path.dirname(LOGFILE)
-try:
-    os.makedirs(logdir, exist_ok=True)
-except Exception as e:
-    print(f"ERROR: could not create log dir {logdir}: {e}", file=sys.stderr)
+logdir = os.path.dirname(LOGFILE) if LOGFILE else None
+if logdir:
+    try:
+        os.makedirs(logdir, exist_ok=True)
+    except Exception as e:
+        print(f"ERROR: could not create log dir {logdir}: {e}", file=sys.stderr)
 
 logger = logging.getLogger('rog-syncobra')
 logger.setLevel(logging.INFO)
@@ -136,14 +149,15 @@ sh.setFormatter(fmt)
 logger.addHandler(sh)
 LOG_HANDLERS.append(sh)
 
-try:
-    fh = logging.FileHandler(LOGFILE)
-    fh.setLevel(logging.INFO)
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-    LOG_HANDLERS.append(fh)
-except Exception as e:
-    logger.error(f"Could not open log file {LOGFILE}: {e}")
+if LOGFILE:
+    try:
+        fh = logging.FileHandler(LOGFILE)
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+        LOG_HANDLERS.append(fh)
+    except Exception as e:
+        logger.error(f"Could not open log file {LOGFILE}: {e}")
 
 try:
     from systemd.journal import JournalHandler

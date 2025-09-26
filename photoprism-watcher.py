@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import queue
 import re
@@ -58,6 +59,58 @@ TMP_RE = [re.compile(pattern, re.IGNORECASE) for pattern in TMP_PATTERNS]
 MONTH_RE = re.compile(r"^(?P<year>\d{4})/(?P<month>\d{2})(?:/|$)")
 
 
+DEFAULT_LOGFILE = '/var/log/rog-syncobra/photoprism-watcher.log'
+
+
+def _resolve_logfile() -> Optional[str]:
+    raw = os.environ.get('PHOTOPRISM_WATCHER_LOGFILE')
+    if raw is None:
+        return DEFAULT_LOGFILE
+    candidate = raw.strip()
+    if not candidate:
+        return None
+    return os.path.abspath(os.path.expanduser(candidate))
+
+
+LOGFILE = _resolve_logfile()
+
+logger = logging.getLogger('photoprism-watcher')
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+_LOG_HANDLERS: list[logging.Handler] = []
+
+fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
+
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setLevel(logging.INFO)
+stream_handler.setFormatter(fmt)
+logger.addHandler(stream_handler)
+_LOG_HANDLERS.append(stream_handler)
+
+if LOGFILE:
+    logdir = os.path.dirname(LOGFILE)
+    try:
+        os.makedirs(logdir, exist_ok=True)
+    except Exception as exc:
+        logger.error("Could not create log dir %s: %s", logdir, exc)
+    try:
+        file_handler = logging.FileHandler(LOGFILE)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(fmt)
+        logger.addHandler(file_handler)
+        _LOG_HANDLERS.append(file_handler)
+    except Exception as exc:
+        logger.error("Could not open log file %s: %s", LOGFILE, exc)
+
+
+def configure_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logger.setLevel(level)
+    for handler in _LOG_HANDLERS:
+        handler.setLevel(level)
+
+
 def _normalize_pp_base_url(base_url: str) -> str:
     """Ensure the PhotoPrism base URL includes the /api/v1 suffix."""
 
@@ -109,7 +162,7 @@ def verbose_print(cfg: Config, message: str) -> None:
     """Emit a message only when verbose mode is enabled."""
 
     if cfg.verbose:
-        print(message)
+        logger.debug(message)
 
 
 class PhotoPrismClient:
@@ -156,7 +209,7 @@ class PhotoPrismClient:
             "originals": True,
         }
         if self.cfg.dry_run:
-            print(f"DRY-RUN: would POST {url} {payload}")
+            logger.info("DRY-RUN: would POST %s %s", url, payload)
             return
         verbose_print(self.cfg, f"[PhotoPrism] POST {url} {payload}")
         resp = self.session.post(
@@ -177,7 +230,7 @@ class PhotoPrismClient:
                 timeout=30,
             )
         resp.raise_for_status()
-        print(f"[PhotoPrism] Index triggered for {rel_dest_path}: {resp.status_code}")
+        logger.info("[PhotoPrism] Index triggered for %s: %s", rel_dest_path, resp.status_code)
 
 
 @dataclass
@@ -316,21 +369,24 @@ def worker_loop(cfg: Config, q: MonthQueue, client: PhotoPrismClient) -> None:
                                 body = exc.response.text.strip()
                                 if len(body) > 200:
                                     body = f"{body[:200]}…"
-                            print(
-                                f"[Worker] Failed to index {dest}: HTTP {status} {body}",
-                                file=sys.stderr,
+                            logger.error(
+                                "[Worker] Failed to index %s: HTTP %s %s",
+                                dest,
+                                status,
+                                body,
                             )
                             pending.add(ym)
                             last_activity = time.time()
                         except Exception as exc:  # pragma: no cover - defensive
-                            print(
-                                f"[Worker] Unexpected error indexing {dest}: {exc}",
-                                file=sys.stderr,
+                            logger.error(
+                                "[Worker] Unexpected error indexing %s: %s",
+                                dest,
+                                exc,
                             )
                             pending.add(ym)
                             last_activity = time.time()
                     else:
-                        print(f"[Debounce] Skipping {ym} (too soon)")
+                        logger.info("[Debounce] Skipping %s (too soon)", ym)
                     q.mark_processed(ym)
 
 
@@ -414,11 +470,13 @@ def parse_args() -> Config:
 def main() -> None:
     cfg = parse_args()
 
+    configure_logging(cfg.verbose)
+
     missing = [path for path in cfg.watch_dirs if not os.path.isdir(path)]
     if missing:
-        print(
-            "ERROR: watch dir(s) not found: " + ", ".join(sorted(missing)),
-            file=sys.stderr,
+        logger.error(
+            "ERROR: watch dir(s) not found: %s",
+            ", ".join(sorted(missing)),
         )
         sys.exit(2)
 
@@ -434,7 +492,7 @@ def main() -> None:
     stop_event = threading.Event()
 
     def handle_sig(signum, frame):  # type: ignore[override]
-        print("Stopping...")
+        logger.info("Stopping...")
         stop_event.set()
         observer.stop()
 
@@ -443,9 +501,11 @@ def main() -> None:
 
     observer.start()
     watches = ", ".join(cfg.watch_dirs)
-    print(
-        f"Watching: {watches} -> index under {cfg.dest_root} "
-        f"(PhotoPrism {cfg.pp_base_url})",
+    logger.info(
+        "Watching: %s -> index under %s (PhotoPrism %s)",
+        watches,
+        cfg.dest_root,
+        cfg.pp_base_url,
     )
     verbose_print(
         cfg,

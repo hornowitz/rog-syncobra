@@ -150,8 +150,18 @@ disables skip markers entirely. Legacy deployments using
 `EXTRA_ARGS="..."` continue to work, but the per-variable approach is easier to
 audit at a glance.
 
+Assign `INPUTDIR=/path/to/incoming` in each configuration to process a single
+tree, or set `INPUTDIRS=/path/one:/path/two` to monitor multiple roots. The
+systemd unit expands `INPUTDIRS` into repeated `--inputdir` arguments so watch
+mode reacts to changes in every listed directory.
+
 ## Logging
 
-When running under systemd the service logs to the system journal and can be
-viewed with `journalctl -u rog-syncobra@<instance>.service`.  Additionally, a
-rotating log file is written to `/var/log/rog-syncobra/rog-syncobra.log`.
+When running under systemd the services log to the system journal and can be
+viewed with `journalctl -u <service>@<instance>.service`. Each instance also
+writes to its own log file under `/var/log/rog-syncobra/`. rog-syncobra
+instances use `rog-syncobra-<instance>.log` by default, while PhotoPrism watcher
+instances write to `photoprism-watcher-<instance>.log`. Override the paths with
+the `ROG_SYNCOBRA_LOGFILE` or `PHOTOPRISM_WATCHER_LOGFILE` environment
+variables in the corresponding configuration files when a custom location is
+desired.
