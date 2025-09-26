@@ -146,7 +146,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
     logger.debug("Found %d files to process", len(raw_files))
     cache_map: dict[Path, dict] = {}
     root_map: dict[Path, Path] = {}
-    all_files: list[tuple[Path, Path]] = []
+    all_files: list[tuple[Path, Path, os.stat_result]] = []
+    size_groups: defaultdict[int, list[Path]] = defaultdict(list)
     cache_root_cache: dict[Path, Path] = {}
 
     delete_roots_resolved: set[Path] | None
@@ -188,15 +189,26 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         root_map[f] = root_cache
         if use_cache and root_cache not in cache_map:
             cache_map[root_cache] = load_cache(root_cache, strip_metadata)
-        all_files.append((f, root_cache))
+        try:
+            stat = f.stat()
+        except OSError as e:
+            logger.warning("Skipping %s: %s", f, e)
+            continue
+        all_files.append((f, root_cache, stat))
+        size_groups[stat.st_size].append(f)
+
+    hash_candidates = [entry for entry in all_files if len(size_groups[entry[2].st_size]) > 1]
+    if logger.isEnabledFor(logging.DEBUG):
+        skipped = len(all_files) - len(hash_candidates)
+        logger.debug("Skipping hashing for %d files with unique sizes", skipped)
 
     hash_map: defaultdict[str, list[Path]] = defaultdict(list)
     if threads is None or threads < 1:
         threads = os.cpu_count() or 1
     logger.debug("Using %d worker threads", threads)
 
-    def hash_with_cache(item: tuple[Path, Path]) -> tuple[Path, str | None]:
-        path, root = item
+    def hash_with_cache(item: tuple[Path, Path, os.stat_result]) -> tuple[Path, str | None]:
+        path, root, _initial_stat = item
         try:
             stat = path.stat()
         except OSError as e:
@@ -239,10 +251,10 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             entry['xxh64'] = digest
         return path, digest
 
-    progress = tqdm(total=len(all_files), unit="file", disable=not show_progress)
+    progress = tqdm(total=len(hash_candidates), unit="file", disable=not show_progress)
     try:
         with ThreadPoolExecutor(max_workers=threads) as ex:
-            it = ex.map(hash_with_cache, all_files)
+            it = ex.map(hash_with_cache, hash_candidates)
             try:
                 for path, digest in it:
                     if digest:

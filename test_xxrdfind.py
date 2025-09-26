@@ -63,6 +63,8 @@ class CacheFailureTest(TestCase):
             root = Path(tmp)
             target = root / "video.mp4"
             target.write_bytes(b"data")
+            other = root / "other.mp4"
+            other.write_bytes(b"xxxx")
 
             def fake_file_hash(path, strip_metadata=False, algorithm='xxh64'):
                 return path, None, 'exiftool failed'
