@@ -51,6 +51,9 @@ ExecStart=/usr/bin/env bash -c "set -euo pipefail; \
     read -r -a extra <<< \"$${EXTRA_ARGS}\"; \
     ARGS+=(\"$${extra[@]}\"); \
   fi; \
+  if [[ -z \"$${PHOTOPRISM_WATCHER_LOGFILE:-}\" ]]; then \
+    export PHOTOPRISM_WATCHER_LOGFILE=/var/log/rog-syncobra/photoprism-watcher-%i.log; \
+  fi; \
   exec \"$${ARGS[@]}\""
 Restart=on-failure
 StandardOutput=journal

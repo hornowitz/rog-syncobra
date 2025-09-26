@@ -32,3 +32,6 @@ PHOTOPRISM_API_PASSWORD=supersecret
 
 # Additional command-line arguments (space separated), e.g.:
 # EXTRA_ARGS="--initial-index"
+
+# Optional log file override (defaults to /var/log/rog-syncobra/photoprism-watcher-<instance>.log)
+# PHOTOPRISM_WATCHER_LOGFILE=/var/log/rog-syncobra/photoprism-watcher-example.log

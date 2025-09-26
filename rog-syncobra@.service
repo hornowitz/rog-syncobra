@@ -6,7 +6,26 @@ After=network.target
 Type=simple
 # Load instance-specific settings from /etc/rog-syncobra/<instance>.conf
 EnvironmentFile=/etc/rog-syncobra/%i.conf
-ExecStart=/usr/bin/env bash -c 'exec /usr/bin/env python3 /usr/local/bin/rog-syncobra.py --watch --inputdir "$INPUTDIR" --move2targetdir "$DESTDIR"'
+ExecStart=/usr/bin/env bash -c "set -euo pipefail; \
+  ARGS=(/usr/bin/env python3 /usr/local/bin/rog-syncobra.py --watch); \
+  if [[ -n \"$${INPUTDIRS:-}\" ]]; then \
+    IFS=':' read -r -a _input_dirs <<< \"$${INPUTDIRS}\"; \
+  elif [[ -n \"$${INPUTDIR:-}\" ]]; then \
+    _input_dirs=(\"$${INPUTDIR}\"); \
+  else \
+    echo 'INPUTDIR or INPUTDIRS must be set in /etc/rog-syncobra/%i.conf' >&2; \
+    exit 1; \
+  fi; \
+  for _dir in \"$${_input_dirs[@]}\"; do \
+    if [[ -n \"$${_dir}\" ]]; then \
+      ARGS+=(--inputdir \"$${_dir}\"); \
+    fi; \
+  done; \
+  ARGS+=(--move2targetdir \"$${DESTDIR:?Set DESTDIR in /etc/rog-syncobra/%i.conf}\"); \
+  if [[ -z \"$${ROG_SYNCOBRA_LOGFILE:-}\" ]]; then \
+    export ROG_SYNCOBRA_LOGFILE=/var/log/rog-syncobra/rog-syncobra-%i.log; \
+  fi; \
+  exec \"$${ARGS[@]}\""
 Restart=on-failure
 StandardOutput=journal
 StandardError=journal
