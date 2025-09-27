@@ -410,8 +410,8 @@ def main():
     p.add_argument('-n', '--dry-run', action='store_true', help="Dry run")
     p.add_argument('-t', '--threads', type=int, default=os.cpu_count() or 1,
                    help="Worker threads")
-    p.add_argument('--scan-threads', type=int, default=None,
-                   help="Threads for directory scanning (default: CPU count)")
+    p.add_argument('--scan-threads', type=int, default=os.cpu_count() or 1,
+                   help="Threads for directory scanning")
     p.add_argument('-l', '--log-level', default='INFO', help="Logging level")
     p.add_argument('-v', '--verbose', action='store_true', help="Enable verbose (DEBUG) logging")
     p.add_argument('-p', '--no-progress', action='store_true', help="Disable progress bar")
