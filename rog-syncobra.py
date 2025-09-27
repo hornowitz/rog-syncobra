@@ -565,7 +565,10 @@ def check_year_mount(dest):
 def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=None):
     path_strings = [str(p) for p in paths]
     details = []
-    if strip_metadata:
+    mode = strip_metadata
+    if isinstance(mode, str) and mode == 'both':
+        details.append('metadata+raw')
+    elif mode:
         details.append('strip_metadata')
     delete_within_strings = [str(root) for root in delete_within] if delete_within else []
     threads = XXRDFIND_CONFIG.get('threads')
@@ -629,8 +632,10 @@ def raw_dedupe(src, dest, dry_run=False, *_, **__):
         paths.append(dest_abs)
     paths.append(src_abs)
     prefix = "[DRY] " if dry_run else ""
-    logger.info(f"{prefix}Raw dedupe via xxrdfind: {' '.join(paths)}")
-    xxrdfind_dedupe(paths, dry_run=dry_run, strip_metadata=True)
+    logger.info(
+        f"{prefix}Raw dedupe via xxrdfind (including metadata pass): {' '.join(paths)}"
+    )
+    xxrdfind_dedupe(paths, dry_run=dry_run, strip_metadata='both')
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
