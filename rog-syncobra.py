@@ -183,6 +183,12 @@ def configure_xxrdfind(threads: Optional[int] = None, scan_threads: Optional[int
     XXRDFIND_CONFIG['threads'] = threads
     XXRDFIND_CONFIG['scan_threads'] = scan_threads
 
+    logger.debug(
+        "xxrdfind thread configuration: workers=%s, scan_workers=%s",
+        threads if threads is not None else 'auto',
+        scan_threads if scan_threads is not None else 'auto',
+    )
+
 
 @dataclass
 class OperationTracker:
@@ -1258,14 +1264,22 @@ def pipeline(args, src):
 def _run_pipelines(args, sources):
     if not sources:
         return
+    cpu_count = os.cpu_count() or 1
+    max_workers = min(len(sources), cpu_count)
+    logger.debug(
+        "Pipeline threading plan: sources=%d, cpu_count=%d, max_workers=%d",
+        len(sources),
+        cpu_count,
+        max_workers,
+    )
     if len(sources) > 1 and args.move2targetdir:
         dest_root = os.path.expanduser(args.move2targetdir).rstrip('/') or '/'
         check_disk_space(sources, dest_root, args.dry_run)
     if len(sources) == 1:
+        logger.debug("Single source detected; running pipeline sequentially without worker threads")
         pipeline(args, sources[0])
         return
 
-    max_workers = min(len(sources), os.cpu_count() or len(sources))
     logger.info(
         "Processing %d input directories in parallel with %d workers",
         len(sources),
