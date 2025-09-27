@@ -171,6 +171,19 @@ except Exception:
 # ────────────────────────────────────────────────────────────────────────────────
 
 
+XXRDFIND_CONFIG: dict[str, Optional[int]] = {
+    'threads': None,
+    'scan_threads': None,
+}
+
+
+def configure_xxrdfind(threads: Optional[int] = None, scan_threads: Optional[int] = None) -> None:
+    """Configure xxrdfind execution defaults."""
+
+    XXRDFIND_CONFIG['threads'] = threads
+    XXRDFIND_CONFIG['scan_threads'] = scan_threads
+
+
 @dataclass
 class OperationTracker:
     deleted: list[Path] = field(default_factory=list)
@@ -304,6 +317,8 @@ ENV_VALUE_FLAGS: dict[str, dict[str, Union[str, bool]]] = {
     'ARCHIVE_YEARS': {'flag': '--archive-years'},
     'SKIP_MARKER': {'flag': '--skip-marker', 'allow_empty': True},
     'MIN_AGE_DAYS': {'flag': '--min-age-days'},
+    'XXRDFIND_THREADS': {'flag': '--xxrdfind-threads'},
+    'XXRDFIND_SCAN_THREADS': {'flag': '--xxrdfind-scan-threads'},
 }
 
 
@@ -402,6 +417,10 @@ def parse_args():
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
                    help="Verify current year dir under destination is a mountpoint")
+    p.add_argument('--xxrdfind-threads', type=int, default=None,
+                   help="Override worker threads for xxrdfind (default: auto)")
+    p.add_argument('--xxrdfind-scan-threads', type=int, default=None,
+                   help="Override directory scan threads for xxrdfind (default: auto)")
     p.add_argument('-m','--move2targetdir', metavar='DIR', default='',
                    help="Destination directory for processed files")
     p.add_argument('-w','--whatsapp', action='store_true',
@@ -543,6 +562,12 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
     if strip_metadata:
         details.append('strip_metadata')
     delete_within_strings = [str(root) for root in delete_within] if delete_within else []
+    threads = XXRDFIND_CONFIG.get('threads')
+    scan_workers = XXRDFIND_CONFIG.get('scan_threads')
+    if threads is not None:
+        details.append(f"threads={threads}")
+    if scan_workers is not None:
+        details.append(f"scan_threads={scan_workers}")
     if delete_within_strings:
         details.append(f"delete_within={', '.join(delete_within_strings)}")
     detail_str = f" ({'; '.join(details)})" if details else ''
@@ -556,9 +581,11 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
         [Path(p) for p in path_strings],
         delete=True,
         dry_run=dry_run,
+        threads=threads,
         show_progress=False,
         strip_metadata=strip_metadata,
         delete_roots=delete_roots,
+        scan_workers=scan_workers,
     )
     tracker = get_operation_tracker()
     tracker.record_deleted(summary.deleted)
@@ -1273,6 +1300,7 @@ def _wait_for_change(inputdirs):
 def main():
     _inject_env_cli_args()
     args = parse_args()
+    configure_xxrdfind(args.xxrdfind_threads, args.xxrdfind_scan_threads)
     set_logging_verbosity(args.debug or getattr(args, 'verbose', False))
     if args.install_deps:
         install_requirements()
