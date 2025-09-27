@@ -1016,16 +1016,18 @@ def exif_sort(src, dest, args):
                 cmd = [
                     'exiftool', vflag,
                     '-if', cond,
-                    '-if', 'not defined $Keywords or $Keywords!~/WhatsApp/i',
+                    '-if', 'not defined $XMP:Subject or $XMP:Subject!~/WhatsApp/i or not defined $Keywords or $Keywords!~/WhatsApp/i',
                     '-Keywords+=WhatsApp',
+                    '-XMP-dc:Subject+=WhatsApp',
                     '-alldates<20${filename}','-FileModifyDate<20${filename}',
                     '-overwrite_original_in_place','-P','-fast2', *exts
                 ]
                 queue(cmd, message=stage_message())
 
+            whatsapp_tag_condition = '$Keywords=~/whatsapp/i or $XMP:Subject=~/whatsapp/i'
             cmd = [
                 'exiftool', vflag,
-                '-if','$Keywords=~/whatsapp/i',
+                '-if', whatsapp_tag_condition,
                 '-if','not defined $CreateDate',
                 '-CreateDate<FileModifyDate',
                 '-overwrite_original_in_place','-P','-fast2',
@@ -1034,7 +1036,7 @@ def exif_sort(src, dest, args):
             queue(cmd, message=stage_message())
             cmd = [
                 'exiftool', vflag,
-                '-if','$Keywords=~/whatsapp/i',
+                '-if', whatsapp_tag_condition,
                 '-FileName<${CreateDate} ${Keywords}%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','JPG','-ext+','MP4','-ext+','3GP'
@@ -1042,7 +1044,7 @@ def exif_sort(src, dest, args):
             queue(cmd, message=stage_message())
             cmd = [
                 'exiftool', vflag,
-                '-if','$Keywords=~/whatsapp/i',
+                '-if', whatsapp_tag_condition,
                 '-Directory<$CreateDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
             ]
