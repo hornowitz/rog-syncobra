@@ -231,6 +231,9 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
     seen_paths: set[Path] = set()
 
     for f, root in raw_files:
+        if f.name.startswith('.xxrdfind_cache') and f.suffix == '.json':
+            logger.debug("Skipping cache file %s", f)
+            continue
         resolved = f.resolve()
         if resolved in seen_paths:
             logger.debug("Skipping already queued path %s", f)
