@@ -11,6 +11,7 @@ Options:
     -d, --delete             Remove duplicate files, keeping first instance (default: keep files).
     -n, --dry-run            Show actions without deleting files (default: false).
     -t, --threads N          Number of hashing worker threads (default: CPU count).
+        --scan-threads N     Number of directory scanning threads (default: CPU count).
     -l, --log-level L        Logging level (DEBUG, INFO, WARNING; default INFO).
     -p, --no-progress        Disable progress bar (default: show progress).
     -s, --strip-metadata     Hash file content with metadata removed (default: include metadata).
@@ -25,7 +26,7 @@ import argparse
 import logging
 from pathlib import Path
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from dataclasses import dataclass, field
 import os
 import subprocess
@@ -123,32 +124,96 @@ def file_hash(
         return path, None, str(e)
 
 
-def iter_files(paths, recursive: bool = True):
+def _scan_directory(path: Path, recursive: bool) -> tuple[list[Path], list[Path]]:
+    files: list[Path] = []
+    subdirs: list[Path] = []
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    entry_path = Path(entry.path)
+                    if entry.is_file(follow_symlinks=False):
+                        files.append(entry_path)
+                    elif recursive and entry.is_dir(follow_symlinks=False):
+                        subdirs.append(entry_path)
+                except OSError as e:
+                    logger.warning("Error accessing %s: %s", entry.path, e)
+    except OSError as e:
+        logger.warning("Failed to scan directory %s: %s", path, e)
+    return files, subdirs
+
+
+def iter_files(paths, recursive: bool = True, scan_workers: int | None = None):
     for p in paths:
         logger.debug("Scanning %s", p)
         if p.is_file():
             logger.debug("Found file %s", p)
             yield p, p.parent
         elif p.is_dir():
-            iterator = p.rglob('*') if recursive else p.iterdir()
-            for sub in iterator:
-                if sub.is_file():
-                    logger.debug("Found file %s", sub)
-                    yield sub, p
+            if not recursive:
+                try:
+                    with os.scandir(p) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_file(follow_symlinks=False):
+                                    file_path = Path(entry.path)
+                                    logger.debug("Found file %s", file_path)
+                                    yield file_path, p
+                            except OSError as e:
+                                logger.warning("Error accessing %s: %s", entry.path, e)
+                except OSError as e:
+                    logger.warning("Failed to scan directory %s: %s", p, e)
+                continue
+
+            workers = (
+                scan_workers
+                if (scan_workers is not None and scan_workers > 0)
+                else (os.cpu_count() or 1)
+            )
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                in_progress: dict[Future[tuple[list[Path], list[Path]]], Path] = {}
+                seen_dirs: set[Path] = set()
+
+                def submit_dir(dir_path: Path):
+                    try:
+                        resolved = dir_path.resolve()
+                    except OSError as e:
+                        logger.warning("Failed to resolve %s: %s", dir_path, e)
+                        return
+                    if resolved in seen_dirs:
+                        return
+                    seen_dirs.add(resolved)
+                    future = executor.submit(_scan_directory, resolved, recursive)
+                    in_progress[future] = resolved
+
+                submit_dir(p)
+                while in_progress:
+                    for future in as_completed(list(in_progress.keys())):
+                        dir_path = in_progress.pop(future)
+                        try:
+                            files, subdirs = future.result()
+                        except Exception as e:  # pragma: no cover - unexpected
+                            logger.warning("Directory scan failed for %s: %s", dir_path, e)
+                            files, subdirs = [], []
+                        for file_path in files:
+                            logger.debug("Found file %s", file_path)
+                            yield file_path, dir_path
+                        for subdir in subdirs:
+                            submit_dir(subdir)
 
 
 def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progress=True,
                     strip_metadata=False, recursive: bool = True, use_cache: bool = True,
                     delete_roots: list[Path] | None = None,
+                    scan_workers: int | None = None,
                     summary: DuplicateSummary | None = None) -> DuplicateSummary:
     summary = summary or DuplicateSummary()
-    raw_files = list(iter_files(paths, recursive))
+    raw_files = list(iter_files(paths, recursive, scan_workers=scan_workers))
     logger.debug("Found %d files to process", len(raw_files))
     cache_map: dict[Path, dict] = {}
     root_map: dict[Path, Path] = {}
     all_files: list[tuple[Path, Path, os.stat_result]] = []
     size_groups: defaultdict[int, list[Path]] = defaultdict(list)
-    cache_root_cache: dict[Path, Path] = {}
 
     delete_roots_resolved: set[Path] | None
     if delete_roots:
@@ -163,20 +228,6 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         except ValueError:
             return False
 
-    def cache_root_for(path: Path, base: Path) -> Path:
-        dir_path = path.parent
-        if dir_path in cache_root_cache:
-            return cache_root_cache[dir_path]
-        current = dir_path
-        while True:
-            if _cache_file(current, strip_metadata).exists():
-                cache_root_cache[dir_path] = current
-                return current
-            if current == base:
-                cache_root_cache[dir_path] = base
-                return base
-            current = current.parent
-
     seen_paths: set[Path] = set()
 
     for f, root in raw_files:
@@ -185,7 +236,7 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             logger.debug("Skipping already queued path %s", f)
             continue
         seen_paths.add(resolved)
-        root_cache = cache_root_for(f, root) if use_cache else root
+        root_cache = f.parent if use_cache else root
         root_map[f] = root_cache
         if use_cache and root_cache not in cache_map:
             cache_map[root_cache] = load_cache(root_cache, strip_metadata)
@@ -359,6 +410,8 @@ def main():
     p.add_argument('-n', '--dry-run', action='store_true', help="Dry run")
     p.add_argument('-t', '--threads', type=int, default=os.cpu_count() or 1,
                    help="Worker threads")
+    p.add_argument('--scan-threads', type=int, default=None,
+                   help="Threads for directory scanning (default: CPU count)")
     p.add_argument('-l', '--log-level', default='INFO', help="Logging level")
     p.add_argument('-v', '--verbose', action='store_true', help="Enable verbose (DEBUG) logging")
     p.add_argument('-p', '--no-progress', action='store_true', help="Disable progress bar")
@@ -387,6 +440,7 @@ def main():
             delete=args.delete,
             dry_run=args.dry_run,
             threads=args.threads,
+            scan_workers=args.scan_threads,
             show_progress=not args.no_progress,
             strip_metadata=args.strip_metadata,
             recursive=args.recursive,
