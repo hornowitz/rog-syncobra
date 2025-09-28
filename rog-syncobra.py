@@ -1036,9 +1036,9 @@ def exif_sort(src, dest, args):
                     ['-ext', 'MP4', '-ext', 'MOV'],
                     WHATSAPP_VIDEO_EXTS,
                     [
-                        '-Keywords=Whatsapp',
-                        '-Keys:Keywords=Whatsapp',
-                        '-XMP-dc:Subject=Whatsapp',
+                        '-Keywords=WhatsApp',
+                        '-Keys:Keywords=WhatsApp',
+                        '-XMP-dc:Subject=WhatsApp',
                     ],
                 ),
                 # WhatsApp Videos (3GP)
@@ -1047,9 +1047,9 @@ def exif_sort(src, dest, args):
                     ['-ext', '3GP'],
                     {'.3gp'},
                     [
-                        '-Keywords=Whatsapp',
-                        '-Keys:Keywords=Whatsapp',
-                        '-XMP-dc:Subject=Whatsapp',
+                        '-Keywords=WhatsApp',
+                        '-Keys:Keywords=WhatsApp',
+                        '-XMP-dc:Subject=WhatsApp',
                     ],
                 ),
 
@@ -1091,7 +1091,7 @@ def exif_sort(src, dest, args):
             cmd = [
                 'exiftool', vflag,
                 '-if', whatsapp_tag_condition,
-                '-FileName<${FileModifyDate} whatsapp%-c.%e',
+                '-FileName<${FileModifyDate} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ]
@@ -1102,6 +1102,14 @@ def exif_sort(src, dest, args):
                 '-Directory<$FileModifyDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
+            ]
+            queue(cmd, message=stage_message())
+            cmd = [
+                'exiftool', vflag,
+                '-if', whatsapp_tag_condition,
+                '-Directory<$FileModifyDate/WhatsApp',
+                '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
+                '-ext+','JPG','-ext+','JPEG'
             ]
             queue(cmd, message=stage_message())
 
