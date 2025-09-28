@@ -1096,6 +1096,7 @@ def exif_sort(src, dest, args):
         cmd = [
             'exiftool', vflag,
             '-if', 'not defined $Keywords',
+            '-if', 'not defined $Keys:Keywords',
             '-if', 'not defined $model',
             "-FileName<${FileModifyDate}%-c.%e",
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
@@ -1110,6 +1111,7 @@ def exif_sort(src, dest, args):
         cmd = [
             'exiftool', vflag,
             '-if','not defined $Keywords',
+            '-if','not defined $Keys:Keywords',
             '-Filename<${ModifyDate}%-c.%e',
             '-Filename<${DateTimeOriginal}%-c.%e',
             '-Filename<${CreateDate}%-c.%e',
@@ -1124,7 +1126,7 @@ def exif_sort(src, dest, args):
         queue(cmd, message="DCIM processing")
         cmd = [
             'exiftool', vflag,
-            '-if','not defined $Keywords and not defined $model;',
+            '-if','not defined $Keywords and not defined $Keys:Keywords and not defined $model;',
             '-Directory<$FileModifyDate/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         ]
