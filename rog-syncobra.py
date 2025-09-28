@@ -1389,6 +1389,9 @@ class _QueueingEventHandler(_WatchdogBase):
         self._enqueue(event)
 
 
+_WATCHDOG_REARM_DELAY = 1.0
+
+
 class _WatchdogWatcher:
     """Manage a watchdog observer and expose events as a simple iterator."""
 
@@ -1444,6 +1447,69 @@ class _WatchdogWatcher:
                 continue
             yield path
 
+
+def _run_watch_mode(args, inputdirs: Sequence[str]) -> None:
+    last_processed: dict[str, float] = {}
+    rearm_delay = _WATCHDOG_REARM_DELAY
+
+    try:
+        with _WatchdogWatcher(inputdirs) as watcher:
+            _run_pipelines(args, inputdirs)
+            processed_time = time.monotonic()
+            for root in inputdirs:
+                last_processed[root] = processed_time
+
+            for event_path in watcher:
+                if not event_path:
+                    logger.info("No path detected from watcher; re-arming")
+                    continue
+
+                matching = [
+                    src
+                    for src in inputdirs
+                    if event_path == src or event_path.startswith(f"{src}{os.sep}")
+                ]
+
+                roots_to_check = list(matching) if matching else list(inputdirs)
+                now = time.monotonic()
+                ready = [
+                    root
+                    for root in roots_to_check
+                    if now - last_processed.get(root, 0.0) >= rearm_delay
+                ]
+
+                if not ready:
+                    logger.debug(
+                        "Ignoring watchdog event for %s; matching roots recently processed",
+                        event_path,
+                    )
+                    continue
+
+                if matching:
+                    joined_match = ", ".join(ready)
+                    logger.info(
+                        "Detected filesystem change under %s; sleeping %ds before processing",
+                        joined_match,
+                        args.grace,
+                    )
+                else:
+                    logger.info(
+                        "Detected change at %s outside configured roots; sleeping %ds before processing",
+                        event_path,
+                        args.grace,
+                    )
+
+                time.sleep(args.grace)
+                _run_pipelines(args, ready)
+                processed_time = time.monotonic()
+                for root in ready:
+                    last_processed[root] = processed_time
+    except _WatchdogUnavailableError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Watch mode interrupted by user")
+
 def main():
     _inject_env_cli_args()
     args = parse_args()
@@ -1457,41 +1523,9 @@ def main():
     inputdirs = [_expand_path(path) for path in args.inputdirs]
 
     if args.watch:
-        try:
-            with _WatchdogWatcher(inputdirs) as watcher:
-                _run_pipelines(args, inputdirs)
-                joined = ", ".join(inputdirs)
-                logger.info(f"Entering watch mode on {joined}")
-                for event_path in watcher:
-                    if not event_path:
-                        logger.info("No path detected from watcher; re-arming")
-                        continue
-                    matching = [
-                        src
-                        for src in inputdirs
-                        if event_path == src or event_path.startswith(f"{src}{os.sep}")
-                    ]
-                    if matching:
-                        joined_match = ", ".join(matching)
-                        logger.info(
-                            "Detected filesystem change under %s; sleeping %ds before processing",
-                            joined_match,
-                            args.grace,
-                        )
-                    else:
-                        logger.info(
-                            "Detected change at %s outside configured roots; sleeping %ds before processing",
-                            event_path,
-                            args.grace,
-                        )
-                        matching = inputdirs
-                    time.sleep(args.grace)
-                    _run_pipelines(args, matching)
-        except _WatchdogUnavailableError as exc:
-            logger.error(str(exc))
-            sys.exit(1)
-        except KeyboardInterrupt:
-            logger.info("Watch mode interrupted by user")
+        joined = ", ".join(inputdirs)
+        logger.info(f"Entering watch mode on {joined}")
+        _run_watch_mode(args, inputdirs)
     else:
         _run_pipelines(args, inputdirs)
 
