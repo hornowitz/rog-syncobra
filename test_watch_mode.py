@@ -82,3 +82,46 @@ def test_watchdog_watcher_requires_dependency(monkeypatch):
 
     with pytest.raises(MODULE._WatchdogUnavailableError):
         MODULE._WatchdogWatcher(["/watch/me"])
+
+
+def test_watch_mode_respects_rearm_delay(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_pipelines(args, sources):
+        calls.append(tuple(sources))
+
+    monkeypatch.setattr(MODULE, "_run_pipelines", fake_run_pipelines)
+
+    events = [
+        "/watch/one/file1.jpg",
+        "/watch/one/file2.jpg",
+        "/watch/two/file3.jpg",
+    ]
+
+    class DummyWatcher:
+        def __init__(self, roots):
+            assert tuple(roots) == ("/watch/one", "/watch/two")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(events)
+
+    monkeypatch.setattr(MODULE, "_WatchdogWatcher", DummyWatcher)
+
+    monotonic_values = iter([100.0, 101.0, 101.2, 101.3, 102.5, 102.7])
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _: None)
+
+    args = SimpleNamespace(grace=0)
+    MODULE._run_watch_mode(args, ["/watch/one", "/watch/two"])
+
+    assert calls == [
+        ("/watch/one", "/watch/two"),
+        ("/watch/one",),
+        ("/watch/two",),
+    ]
