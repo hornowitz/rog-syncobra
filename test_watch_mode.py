@@ -1,6 +1,9 @@
 import importlib.util
 import os
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("rog-syncobra.py")
 SPEC = importlib.util.spec_from_file_location("rog_syncobra_watch", MODULE_PATH)
@@ -21,28 +24,61 @@ def test_resolve_logfile_env_override(monkeypatch, tmp_path):
     assert MODULE._resolve_logfile() == MODULE.DEFAULT_LOGFILE
 
 
-def test_wait_for_change_passes_all_inputdirs(monkeypatch):
-    captured: dict[str, list[str]] = {}
+def test_watchdog_watcher_schedules_and_emits(monkeypatch):
+    scheduled: list[tuple[str, bool]] = []
 
-    class DummyResult:
-        def __init__(self, stdout: str) -> None:
-            self.stdout = stdout
+    class DummyObserver:
+        def __init__(self) -> None:
+            self.started = False
 
-    def fake_run(cmd, capture_output, text, check):  # noqa: D401 - signature matches subprocess.run
-        captured["cmd"] = cmd
-        return DummyResult("/watch/two/file.jpg|CLOSE_WRITE\n")
+        def schedule(self, handler, path, recursive):
+            scheduled.append((path, recursive))
+            # Expose handler so we can emit events manually during the test.
+            self.handler = handler
 
-    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
-    path = MODULE._wait_for_change(["/watch/one", "/watch/two"])
+        def start(self):
+            self.started = True
 
-    assert captured["cmd"] == [
-        "inotifywait",
-        "-r",
-        "-e",
-        "close_write",
-        "--format",
-        "%w%f|%e",
-        "/watch/one",
-        "/watch/two",
-    ]
-    assert path == "/watch/two/file.jpg"
+        def stop(self):
+            self.started = False
+
+        def join(self, timeout=None):
+            return None
+
+    class DummyBase:
+        def __init__(self) -> None:
+            pass
+
+    monkeypatch.setattr(MODULE, "Observer", DummyObserver)
+    monkeypatch.setattr(MODULE, "FileSystemEventHandler", DummyBase)
+
+    with MODULE._WatchdogWatcher(["/watch/one", "/watch/two"]) as watcher:
+        assert sorted(scheduled) == [
+            ("/watch/one", True),
+            ("/watch/two", True),
+        ]
+        observer = watcher._observer  # type: ignore[attr-defined]
+        handler = observer.handler  # type: ignore[attr-defined]
+
+        handler.on_created(SimpleNamespace(is_directory=False, src_path="/watch/two/file.jpg"))
+        handler.on_moved(
+            SimpleNamespace(
+                is_directory=False,
+                src_path="/watch/one/tmp.jpg",
+                dest_path="/watch/one/file.jpg",
+            )
+        )
+        handler.on_created(SimpleNamespace(is_directory=True, src_path="/watch/one/folder"))
+
+        first = watcher._queue.get_nowait()
+        second = watcher._queue.get_nowait()
+        assert first == "/watch/two/file.jpg"
+        assert second == "/watch/one/file.jpg"
+
+
+def test_watchdog_watcher_requires_dependency(monkeypatch):
+    monkeypatch.setattr(MODULE, "Observer", None)
+    monkeypatch.setattr(MODULE, "FileSystemEventHandler", None)
+
+    with pytest.raises(MODULE._WatchdogUnavailableError):
+        MODULE._WatchdogWatcher(["/watch/me"])

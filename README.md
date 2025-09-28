@@ -8,7 +8,8 @@ The script relies on a few external programs:
 
 - `libimage-exiftool-perl` (provides `exiftool`)
 - `xxhash` (provides `xxhsum`)
-- `inotify-tools` (required only for `--watch` mode)
+- `watchdog` Python package (install via `pip install watchdog` or the `python3-watchdog`
+  package; required only for `--watch` mode)
 - standard Unix tools such as `sort`, `du` and `df`
 
 For metadata or raw-data deduplication an internal script `xxrdfind.py`
