@@ -1035,14 +1035,22 @@ def exif_sort(src, dest, args):
                     r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
                     ['-ext', 'MP4', '-ext', 'MOV'],
                     WHATSAPP_VIDEO_EXTS,
-                    ['-Keys:Keywords+=WhatsApp', '-XMP-dc:Subject+=WhatsApp'],
+                    [
+                        '-Keywords=Whatsapp',
+                        '-Keys:Keywords=Whatsapp',
+                        '-XMP-dc:Subject=Whatsapp',
+                    ],
                 ),
                 # WhatsApp Videos (3GP)
                 (
                     r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
                     ['-ext', '3GP'],
                     {'.3gp'},
-                    ['-Keys:Keywords+=WhatsApp', '-XMP-dc:Subject+=WhatsApp'],
+                    [
+                        '-Keywords=Whatsapp',
+                        '-Keys:Keywords=Whatsapp',
+                        '-XMP-dc:Subject=Whatsapp',
+                    ],
                 ),
 
             ]
@@ -1058,7 +1066,11 @@ def exif_sort(src, dest, args):
                     'exiftool', vflag,
                     '-if', cond,
                     *tag_updates,
-                    '-alldates<20${filename}','-FileModifyDate<20${filename}',
+                    '-AllDates<FileModifyDate',
+                    '-CreateDate<FileModifyDate',
+                    '-ModifyDate<FileModifyDate',
+                    '-DateTimeOriginal<FileModifyDate',
+                    '-FileModifyDate<FileModifyDate',
                     '-overwrite_original_in_place','-P','-fast2', *exts
                 ]
                 queue(cmd, message=stage_message())
@@ -1079,16 +1091,17 @@ def exif_sort(src, dest, args):
             cmd = [
                 'exiftool', vflag,
                 '-if', whatsapp_tag_condition,
-                '-FileName<${CreateDate} ${XMP:Subject}%-c.%e',
+                '-FileName<${FileModifyDate} whatsapp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
-                '-ext+','JPG','-ext+','MP4','-ext+','3GP'
+                '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ]
             queue(cmd, message=stage_message())
             cmd = [
                 'exiftool', vflag,
                 '-if', whatsapp_tag_condition,
-                '-Directory<$CreateDate/WhatsApp',
-                '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
+                '-Directory<$FileModifyDate/WhatsApp',
+                '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
+                '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ]
             queue(cmd, message=stage_message())
 
