@@ -8,6 +8,8 @@ import argparse
 import shlex
 import time
 import threading
+import queue
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,6 +17,13 @@ from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
 import xxrdfind
+
+try:  # pragma: no cover - optional dependency import
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except ImportError:  # pragma: no cover - handled at runtime
+    FileSystemEventHandler = None  # type: ignore[assignment]
+    Observer = None  # type: ignore[assignment]
 
 HEIC_EXTS = {'.heic', '.heif'}
 SCREENSHOT_EXTS = {'.png', '.jpg', '.jpeg', '.heic', '.heif', '.webp'}
@@ -249,9 +258,14 @@ def install_requirements():
     packages = {
         'exiftool': 'libimage-exiftool-perl',
         'xxhsum': 'xxhash',
-        'inotifywait': 'inotify-tools',
     }
     missing = [pkg for prog, pkg in packages.items() if not shutil.which(prog)]
+    python_packages = {
+        'watchdog': 'python3-watchdog',
+    }
+    for module, package in python_packages.items():
+        if importlib.util.find_spec(module) is None:
+            missing.append(package)
     if not missing:
         logger.info("All required programs already installed")
         return
@@ -1327,21 +1341,108 @@ def _run_pipelines(args, sources):
                 logger.exception("Pipeline for %s failed: %s", src, exc)
 
 
-def _wait_for_change(inputdirs):
-    format_str = '%w%f|%e'
-    cmd = ['inotifywait', '-r', '-e', 'close_write', '--format', format_str, *inputdirs]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError as exc:
-        logger.error("inotifywait exited with status %s: %s", exc.returncode, exc)
-        return None
-    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-    if not lines:
-        return None
-    raw_path, _, events = lines[-1].partition('|')
-    event_path = _expand_path(raw_path)
-    logger.debug("inotifywait reported %s (%s)", event_path, events or 'no events')
-    return event_path
+class _WatchdogUnavailableError(RuntimeError):
+    """Raised when watch mode dependencies are missing."""
+
+
+def _require_watchdog() -> None:
+    if Observer is None or FileSystemEventHandler is None:
+        raise _WatchdogUnavailableError(
+            "Watch mode requires the 'watchdog' Python package. "
+            "Install it with 'pip install watchdog' or 'apt install python3-watchdog'."
+        )
+
+
+_WatchdogBase = FileSystemEventHandler or object
+
+
+class _QueueingEventHandler(_WatchdogBase):
+    """Collect file system events into a queue for later processing."""
+
+    def __init__(self, event_queue: "queue.Queue[str]") -> None:
+        super().__init__()
+        self._queue = event_queue
+
+    @staticmethod
+    def _event_path(event) -> Optional[str]:
+        if getattr(event, "is_directory", False):
+            return None
+        path = getattr(event, "dest_path", None) or getattr(event, "src_path", None)
+        if not path:
+            return None
+        return _expand_path(path)
+
+    def _enqueue(self, event) -> None:
+        path = self._event_path(event)
+        if path is None:
+            return
+        logger.debug("Watchdog queued event for %s", path)
+        self._queue.put(path)
+
+    def on_created(self, event) -> None:  # pragma: no cover - thin wrapper
+        self._enqueue(event)
+
+    def on_modified(self, event) -> None:  # pragma: no cover - thin wrapper
+        self._enqueue(event)
+
+    def on_moved(self, event) -> None:  # pragma: no cover - thin wrapper
+        self._enqueue(event)
+
+
+class _WatchdogWatcher:
+    """Manage a watchdog observer and expose events as a simple iterator."""
+
+    def __init__(self, roots: Sequence[str]):
+        _require_watchdog()
+        normalized: list[str] = []
+        seen = set()
+        for raw in roots:
+            path = _expand_path(raw)
+            if path not in seen:
+                normalized.append(path)
+                seen.add(path)
+        if not normalized:
+            raise ValueError("At least one watch directory must be provided")
+        self.roots = tuple(normalized)
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._observer = Observer()
+        self._handler = _QueueingEventHandler(self._queue)
+        self._stop_requested = threading.Event()
+        self._started = False
+
+    def __enter__(self) -> "_WatchdogWatcher":
+        for root in self.roots:
+            logger.debug("Scheduling watchdog observer for %s", root)
+            self._observer.schedule(self._handler, root, recursive=True)
+        self._observer.start()
+        self._started = True
+        self._stop_requested.clear()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._stop_requested.set()
+        if self._started:
+            logger.debug("Stopping watchdog observer")
+            self._observer.stop()
+            try:
+                self._observer.join(timeout=5)
+            except RuntimeError:  # pragma: no cover - defensive
+                pass
+            self._started = False
+
+    def __iter__(self):
+        return self.iter_events()
+
+    def iter_events(self):
+        while not self._stop_requested.is_set():
+            try:
+                path = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            yield path
 
 def main():
     _inject_env_cli_args()
@@ -1356,32 +1457,41 @@ def main():
     inputdirs = [_expand_path(path) for path in args.inputdirs]
 
     if args.watch:
-        check_program('inotifywait')
-        _run_pipelines(args, inputdirs)
-        joined = ", ".join(inputdirs)
-        logger.info(f"Entering watch mode on {joined}")
-        while True:
-            event_path = _wait_for_change(inputdirs)
-            if event_path is None:
-                logger.info("No path detected from watcher; re-arming")
-                continue
-            matching = [src for src in inputdirs if event_path == src or event_path.startswith(f"{src}{os.sep}")]
-            if matching:
-                joined_match = ", ".join(matching)
-                logger.info(
-                    "Detected close_write under %s; sleeping %ds before processing",
-                    joined_match,
-                    args.grace,
-                )
-            else:
-                logger.info(
-                    "Detected change at %s outside configured roots; sleeping %ds before processing",
-                    event_path,
-                    args.grace,
-                )
-                matching = inputdirs
-            time.sleep(args.grace)
-            _run_pipelines(args, matching)
+        try:
+            with _WatchdogWatcher(inputdirs) as watcher:
+                _run_pipelines(args, inputdirs)
+                joined = ", ".join(inputdirs)
+                logger.info(f"Entering watch mode on {joined}")
+                for event_path in watcher:
+                    if not event_path:
+                        logger.info("No path detected from watcher; re-arming")
+                        continue
+                    matching = [
+                        src
+                        for src in inputdirs
+                        if event_path == src or event_path.startswith(f"{src}{os.sep}")
+                    ]
+                    if matching:
+                        joined_match = ", ".join(matching)
+                        logger.info(
+                            "Detected filesystem change under %s; sleeping %ds before processing",
+                            joined_match,
+                            args.grace,
+                        )
+                    else:
+                        logger.info(
+                            "Detected change at %s outside configured roots; sleeping %ds before processing",
+                            event_path,
+                            args.grace,
+                        )
+                        matching = inputdirs
+                    time.sleep(args.grace)
+                    _run_pipelines(args, matching)
+        except _WatchdogUnavailableError as exc:
+            logger.error(str(exc))
+            sys.exit(1)
+        except KeyboardInterrupt:
+            logger.info("Watch mode interrupted by user")
     else:
         _run_pipelines(args, inputdirs)
 
