@@ -232,6 +232,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
     else:
         passes = [bool(strip_metadata)]
 
+    interrupted = False
+
     for index, strip_flag in enumerate(passes):
         if len(passes) > 1:
             logger.debug(
@@ -344,90 +346,96 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                             hash_map[digest].append(path)
                         progress.update(1)
                 except KeyboardInterrupt:
+                    interrupted = True
                     logger.warning("Interrupted during hashing; processing partial results")
                     ex.shutdown(cancel_futures=True)
         finally:
             progress.close()
 
-        try:
-            for digest, group in hash_map.items():
-                if len(group) < 2:
-                    continue
-                strong_map: defaultdict[str, list[Path]] = defaultdict(list)
-                for f in group:
-                    root_cache = root_map[f]
-                    try:
-                        stat = f.stat()
-                    except OSError as e:
-                        logger.warning("Skipping %s: %s", f, e)
+        if not interrupted:
+            try:
+                for digest, group in hash_map.items():
+                    if len(group) < 2:
                         continue
-                    rel = str(f.relative_to(root_cache))
-                    cache = cache_map.get(root_cache, {}) if use_cache else {}
-                    entry = cache.get(rel) if use_cache else None
-                    strong_digest: str | None = None
-                    if use_cache and entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
-                        if entry.get('blake2b_failed'):
-                            logger.debug("Cache indicates failed blake2b hash for %s; skipping", f)
+                    strong_map: defaultdict[str, list[Path]] = defaultdict(list)
+                    for f in group:
+                        root_cache = root_map[f]
+                        try:
+                            stat = f.stat()
+                        except OSError as e:
+                            logger.warning("Skipping %s: %s", f, e)
                             continue
-                        strong_digest = entry.get('blake2b')
-                    if not strong_digest:
-                        _, strong_digest, strong_error = file_hash(f, strip_flag, 'blake2b')
-                        if use_cache:
-                            cache_entry = cache.setdefault(rel, {
-                                'size': stat.st_size,
-                                'mtime': stat.st_mtime,
-                                'xxh64': entry.get('xxh64') or entry.get('hash') if entry else None,
-                            })
-                            if strong_digest:
-                                cache_entry['blake2b'] = strong_digest
-                                cache_entry.pop('blake2b_failed', None)
-                            elif strong_error:
-                                cache_entry.pop('blake2b', None)
-                                cache_entry['blake2b_failed'] = strong_error
-                    if strong_digest:
-                        strong_map[strong_digest].append(f)
-                for strong_digest, files in strong_map.items():
-                    if len(files) < 2:
-                        continue
-                    group_sorted = sorted(files)
-                    logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
-                    if delete:
-                        if delete_roots_resolved is None:
-                            candidates = group_sorted[1:]
-                        else:
-                            delete_candidates = []
-                            keepers = []
-                            for candidate in group_sorted:
-                                if any(is_within(candidate, root) for root in delete_roots_resolved):
-                                    delete_candidates.append(candidate)
-                                else:
-                                    keepers.append(candidate)
-                            if not keepers and delete_candidates:
-                                delete_candidates = delete_candidates[1:]
-                            candidates = delete_candidates
-                        for f in candidates:
-                            if dry_run:
-                                logger.info("Would delete %s", f)
-                                summary.would_delete.append(f)
+                        rel = str(f.relative_to(root_cache))
+                        cache = cache_map.get(root_cache, {}) if use_cache else {}
+                        entry = cache.get(rel) if use_cache else None
+                        strong_digest: str | None = None
+                        if use_cache and entry and entry.get('size') == stat.st_size and entry.get('mtime') == stat.st_mtime:
+                            if entry.get('blake2b_failed'):
+                                logger.debug("Cache indicates failed blake2b hash for %s; skipping", f)
+                                continue
+                            strong_digest = entry.get('blake2b')
+                        if not strong_digest:
+                            _, strong_digest, strong_error = file_hash(f, strip_flag, 'blake2b')
+                            if use_cache:
+                                cache_entry = cache.setdefault(rel, {
+                                    'size': stat.st_size,
+                                    'mtime': stat.st_mtime,
+                                    'xxh64': entry.get('xxh64') or entry.get('hash') if entry else None,
+                                })
+                                if strong_digest:
+                                    cache_entry['blake2b'] = strong_digest
+                                    cache_entry.pop('blake2b_failed', None)
+                                elif strong_error:
+                                    cache_entry.pop('blake2b', None)
+                                    cache_entry['blake2b_failed'] = strong_error
+                        if strong_digest:
+                            strong_map[strong_digest].append(f)
+                    for strong_digest, files in strong_map.items():
+                        if len(files) < 2:
+                            continue
+                        group_sorted = sorted(files)
+                        logger.info("Duplicates: %s", ", ".join(str(p) for p in group_sorted))
+                        if delete:
+                            if delete_roots_resolved is None:
+                                candidates = group_sorted[1:]
                             else:
-                                _, current_digest, _ = file_hash(f, strip_flag, 'blake2b')
-                                if current_digest == strong_digest:
-                                    try:
-                                        f.unlink()
-                                        logger.info("Deleted %s", f)
-                                        summary.deleted.append(f)
-                                    except FileNotFoundError:
-                                        logger.warning("Skipped deletion for %s: file missing", f)
-                                    except OSError as e:
-                                        logger.error("Failed to delete %s: %s", f, e)
+                                delete_candidates = []
+                                keepers = []
+                                for candidate in group_sorted:
+                                    if any(is_within(candidate, root) for root in delete_roots_resolved):
+                                        delete_candidates.append(candidate)
+                                    else:
+                                        keepers.append(candidate)
+                                if not keepers and delete_candidates:
+                                    delete_candidates = delete_candidates[1:]
+                                candidates = delete_candidates
+                            for f in candidates:
+                                if dry_run:
+                                    logger.info("Would delete %s", f)
+                                    summary.would_delete.append(f)
                                 else:
-                                    logger.warning("Skipped deletion for %s: file changed since hashing", f)
-        except KeyboardInterrupt:
-            logger.warning("Interrupted during duplicate verification; saving cache")
-        finally:
-            if use_cache:
-                for root_cache, cache in cache_map.items():
-                    save_cache(root_cache, cache, strip_flag)
+                                    _, current_digest, _ = file_hash(f, strip_flag, 'blake2b')
+                                    if current_digest == strong_digest:
+                                        try:
+                                            f.unlink()
+                                            logger.info("Deleted %s", f)
+                                            summary.deleted.append(f)
+                                        except FileNotFoundError:
+                                            logger.warning("Skipped deletion for %s: file missing", f)
+                                        except OSError as e:
+                                            logger.error("Failed to delete %s: %s", f, e)
+                                    else:
+                                        logger.warning("Skipped deletion for %s: file changed since hashing", f)
+            except KeyboardInterrupt:
+                interrupted = True
+                logger.warning("Interrupted during duplicate verification; saving cache")
+
+        if use_cache:
+            for root_cache, cache in cache_map.items():
+                save_cache(root_cache, cache, strip_flag)
+
+        if interrupted:
+            break
 
     return summary
 
