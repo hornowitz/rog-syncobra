@@ -1036,13 +1036,20 @@ def exif_sort(src, dest, args):
                 whatsapp_logged = True
                 return "WhatsApp processing"
 
+            whatsapp_keywords_condition = '$Keywords=~/whatsapp/i'
+            whatsapp_subject_condition = '$XMP:Subject=~/whatsapp/i'
+            whatsapp_keys_keywords_condition = '$Keys:Keywords=~/whatsapp/i'
+
             blocks = [
                 # WhatsApp Images (JPG)
                 (
                     r"$filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
                     ['-ext', 'JPG'],
                     WHATSAPP_IMAGE_EXTS,
-                    ['-Keywords+=WhatsApp', '-XMP-dc:Subject+=WhatsApp'],
+                    [
+                        ('-Keywords+=WhatsApp', whatsapp_keywords_condition),
+                        ('-XMP-dc:Subject+=WhatsApp', whatsapp_subject_condition),
+                    ],
                 ),
                 # WhatsApp Videos (MP4 + MOV)
                 (
@@ -1050,9 +1057,9 @@ def exif_sort(src, dest, args):
                     ['-ext', 'MP4', '-ext', 'MOV'],
                     WHATSAPP_VIDEO_EXTS,
                     [
-                        '-Keywords=WhatsApp',
-                        '-Keys:Keywords=WhatsApp',
-                        '-XMP-dc:Subject=WhatsApp',
+                        ('-Keywords=WhatsApp', whatsapp_keywords_condition),
+                        ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
+                        ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
                     ],
                 ),
                 # WhatsApp Videos (3GP)
@@ -1061,9 +1068,9 @@ def exif_sort(src, dest, args):
                     ['-ext', '3GP'],
                     {'.3gp'},
                     [
-                        '-Keywords=WhatsApp',
-                        '-Keys:Keywords=WhatsApp',
-                        '-XMP-dc:Subject=WhatsApp',
+                        ('-Keywords=WhatsApp', whatsapp_keywords_condition),
+                        ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
+                        ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
                     ],
                 ),
 
@@ -1076,10 +1083,9 @@ def exif_sort(src, dest, args):
                         describe_extensions(required),
                     )
                     continue
-                cmd = [
+                base_cmd = [
                     'exiftool', vflag,
                     '-if', cond,
-                    *tag_updates,
                     '-AllDates<FileModifyDate',
                     '-CreateDate<FileModifyDate',
                     '-ModifyDate<FileModifyDate',
@@ -1087,7 +1093,17 @@ def exif_sort(src, dest, args):
                     '-FileModifyDate<FileModifyDate',
                     '-overwrite_original_in_place','-P','-fast2', *exts
                 ]
-                queue(cmd, message=stage_message())
+                queue(base_cmd, message=stage_message())
+
+                for tag_update, existing_condition in tag_updates:
+                    cmd = [
+                        'exiftool', vflag,
+                        '-if', cond,
+                        '-if', f'not ({existing_condition})',
+                        tag_update,
+                        '-overwrite_original_in_place','-P','-fast2', *exts
+                    ]
+                    queue(cmd, message=stage_message())
 
             whatsapp_tag_condition = (
                 '$Keywords=~/whatsapp/i or $XMP:Subject=~/whatsapp/i '
