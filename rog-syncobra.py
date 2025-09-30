@@ -673,7 +673,14 @@ def exif_sort(src, dest, args):
     cwd = os.getcwd()
     src_abs = _expand_path(src)
     os.chdir(src_abs)
-    vflag = '-v' if args.debug else '-q'
+    exiftool_flags = ['-q']
+    if args.debug:
+        # Keep exiftool quiet so the stay-open protocol remains predictable while
+        # still surfacing progress information when debugging.
+        exiftool_flags.append('-progress')
+
+    def _exiftool_cmd(*parts: str) -> list[str]:
+        return ['exiftool', *exiftool_flags, *parts]
     ym = '%Y/%m' if args.year_month_sort else '.'
     skip_marker = args.skip_marker
     skip_rel = set()
@@ -1008,12 +1015,11 @@ def exif_sort(src, dest, args):
 
     heic_desc = describe_extensions(HEIC_EXTS)
     if heic_present:
-        cmd = [
-            'exiftool', vflag,
+        cmd = _exiftool_cmd(
             '-FileName<${CreateDate}_$SubSecTimeOriginal ${model;}%-c.%e',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext', 'HEIC'
-        ]
+        )
         queue(cmd, message="HEIC processing")
     else:
         logger.info("Skipping HEIC processing (no %s media detected)", heic_desc or 'HEIC')
@@ -1027,30 +1033,27 @@ def exif_sort(src, dest, args):
         first_tagging = True
         for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
                                  ("DateCreated",   "DateCreated")):
-            cmd = [
-                'exiftool', vflag,
+            cmd = _exiftool_cmd(
                 '-if', base_if,
                 '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
                 '-Keywords+=Screenshot',
                 f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
                 '-overwrite_original_in_place','-P','-fast2'
-            ]
+            )
             queue(cmd, message="Screenshots tagging" if first_tagging else None)
             first_tagging = False
 
-        cmd = [
-            'exiftool', vflag,
+        cmd = _exiftool_cmd(
             '-if', '$Keywords=~/screenshot/i',
             '-Filename<${CreateDate} ${Keywords}%-c.%e',
             '-d', "%Y-%m-%d %H-%M-%S"
-        ]
+        )
         queue(cmd, message="Screenshots rename & move")
-        cmd = [
-            'exiftool', vflag,
+        cmd = _exiftool_cmd(
             '-if', '$Keywords=~/screenshot/i',
             '-Directory<$CreateDate/Screenshots',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
-        ]
+        )
         queue(cmd)
     else:
         logger.info("Skipping screenshot flow (no %s media detected)", screenshot_desc)
@@ -1119,8 +1122,7 @@ def exif_sort(src, dest, args):
                         describe_extensions(required),
                     )
                     continue
-                base_cmd = [
-                    'exiftool', vflag,
+                base_cmd = _exiftool_cmd(
                     '-if', cond,
                     '-AllDates<FileModifyDate',
                     '-CreateDate<FileModifyDate',
@@ -1128,61 +1130,55 @@ def exif_sort(src, dest, args):
                     '-DateTimeOriginal<FileModifyDate',
                     '-FileModifyDate<FileModifyDate',
                     '-overwrite_original_in_place','-P','-fast2', *exts
-                ]
+                )
                 queue(base_cmd, message=stage_message())
 
                 for tag_update, existing_condition in tag_updates:
-                    cmd = [
-                        'exiftool', vflag,
+                    cmd = _exiftool_cmd(
                         '-if', cond,
                         '-if', f'not ({existing_condition})',
                         tag_update,
                         '-overwrite_original_in_place','-P','-fast2', *exts
-                    ]
+                    )
                     queue(cmd, message=stage_message())
 
             whatsapp_tag_condition = (
                 '$Keywords=~/whatsapp/i or $XMP:Subject=~/whatsapp/i '
                 'or $Keys:Keywords=~/whatsapp/i'
             )
-            cmd = [
-                'exiftool', vflag,
+            cmd = _exiftool_cmd(
                 '-if', whatsapp_tag_condition,
                 '-if','not defined $CreateDate',
                 '-CreateDate<FileModifyDate',
                 '-overwrite_original_in_place','-P','-fast2',
                 '-ext+','JPG','-ext+','MP4','-ext+','3GP'
-            ]
+            )
             queue(cmd, message=stage_message())
-            cmd = [
-                'exiftool', vflag,
+            cmd = _exiftool_cmd(
                 '-if', whatsapp_tag_condition,
                 '-FileName<${FileModifyDate} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
-            ]
+            )
             queue(cmd, message=stage_message())
-            cmd = [
-                'exiftool', vflag,
+            cmd = _exiftool_cmd(
                 '-if', whatsapp_tag_condition,
                 '-Directory<$FileModifyDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
-            ]
+            )
             queue(cmd, message=stage_message())
-            cmd = [
-                'exiftool', vflag,
+            cmd = _exiftool_cmd(
                 '-if', whatsapp_tag_condition,
                 '-Directory<$FileModifyDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','JPG','-ext+','JPEG'
-            ]
+            )
             queue(cmd, message=stage_message())
 
     if dcim_present:
         dcim_ext_filters = build_exiftool_extension_filters(DCIM_EXTS - HEIC_EXTS)
-        cmd = [
-            'exiftool', vflag,
+        cmd = _exiftool_cmd(
             '-if', 'not defined $Keywords',
             '-if', 'not defined $Keys:Keywords',
             '-if', 'not defined $model',
@@ -1194,16 +1190,15 @@ def exif_sort(src, dest, args):
             '-ext', 'mts',
             '-ext', 'avi',
             '-ext', 'vob',
-        ]
+        )
         queue(cmd, message="Misc vid processing")
-        dcim_common = [
-            'exiftool', vflag,
+        dcim_common = _exiftool_cmd(
             '-if','not defined $Keywords',
             '-if','not defined $Keys:Keywords',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             *dcim_ext_filters,
             '-ee'
-        ]
+        )
 
         cmd = [
             *dcim_common,
@@ -1231,12 +1226,11 @@ def exif_sort(src, dest, args):
 
         ]
         queue(creation_date_cmd)
-        cmd = [
-            'exiftool', vflag,
+        cmd = _exiftool_cmd(
             '-if','not defined $Keywords and not defined $Keys:Keywords and not defined $model;',
             '-Directory<$FileModifyDate/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
-        ]
+        )
         queue(cmd)
     else:
         logger.info("Skipping DCIM & misc processing (no supported media detected)")
