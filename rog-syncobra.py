@@ -1178,11 +1178,20 @@ def exif_sort(src, dest, args):
         ]
         queue(cmd, message="DCIM processing")
 
+
+        creation_date_condition = (
+            'defined $CreationDate or defined $QuickTime:CreationDate '
+            'or defined $QuickTime:CreateDate'
+        )
+        creation_date_tag = (
+            '${CreationDate;QuickTime:CreationDate;QuickTime:CreateDate}'
+        )
         creation_date_cmd = [
             *dcim_common,
-            '-if','defined $CreationDate',
-            '-Filename<${CreationDate} ${model}%-c.%e',
-            '-Filename<${CreationDate}_$SubSecTimeOriginal ${model}%-c.%e',
+            '-if', creation_date_condition,
+            f'-Filename<{creation_date_tag} ${{model}}%-c.%e',
+            f'-Filename<{creation_date_tag}_$SubSecTimeOriginal ${{model}}%-c.%e',
+
         ]
         queue(creation_date_cmd)
         cmd = [

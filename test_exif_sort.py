@@ -219,10 +219,17 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
 
     payloads = _extract_stay_open_payloads(instances)
     # Ensure that creation-date based renames are gated by a defined check
-    creation_payloads = [payload for payload in payloads if any("${CreationDate}" in part for part in payload)]
+
+    creation_payloads = [payload for payload in payloads if any("${CreationDate" in part for part in payload)]
     assert creation_payloads, "Creation-date rename commands were not queued"
     for payload in creation_payloads:
-        assert any(part == 'defined $CreationDate' for part in payload), payload
+        assert any('defined $CreationDate' in part for part in payload), payload
+        assert any('QuickTime:CreationDate' in part for part in payload), payload
+        assert any(
+            part.startswith('-Filename<${CreationDate;QuickTime:CreationDate;QuickTime:CreateDate}')
+            for part in payload
+        ), payload
+
 
     base_payloads = [payload for payload in payloads if any("${CreateDate}_$SubSecTimeOriginal" in part for part in payload)]
     assert base_payloads, "CreateDate rename command missing"
