@@ -202,16 +202,23 @@ XXRDFIND_CONFIG: dict[str, Optional[int]] = {
 
 
 def configure_xxrdfind(threads: Optional[int] = None, scan_threads: Optional[int] = None) -> None:
-    """Configure xxrdfind execution defaults."""
+    """Configure xxrdfind execution defaults for serialized execution."""
 
-    XXRDFIND_CONFIG['threads'] = threads
-    XXRDFIND_CONFIG['scan_threads'] = scan_threads
+    if threads not in (None, 1):
+        logger.warning(
+            "Ignoring xxrdfind thread override (%s); running sequentially with a single worker",
+            threads,
+        )
+    if scan_threads not in (None, 1):
+        logger.warning(
+            "Ignoring xxrdfind scan thread override (%s); running sequentially with a single worker",
+            scan_threads,
+        )
 
-    logger.debug(
-        "xxrdfind thread configuration: workers=%s, scan_workers=%s",
-        threads if threads is not None else 'auto',
-        scan_threads if scan_threads is not None else 'auto',
-    )
+    XXRDFIND_CONFIG['threads'] = 1
+    XXRDFIND_CONFIG['scan_threads'] = 1
+
+    logger.debug("xxrdfind configured for serialized execution (threads=1, scan_threads=1)")
 
 
 @dataclass
@@ -252,15 +259,11 @@ class OperationTracker:
             logger.info("Moved files: none")
 
 
-_operation_tracker_state = threading.local()
+_operation_tracker = OperationTracker()
 
 
 def get_operation_tracker() -> OperationTracker:
-    tracker = getattr(_operation_tracker_state, 'tracker', None)
-    if tracker is None:
-        tracker = OperationTracker()
-        _operation_tracker_state.tracker = tracker
-    return tracker
+    return _operation_tracker
 
 def check_program(name):
     if not shutil.which(name):
@@ -899,9 +902,9 @@ def exif_sort(src, dest, args):
         if ran_any_job:
             logger.info("Exiftool processing finished")
 
-    def run_worker(_worker_id, worker_targets):
+    def run_exiftool_stay_open(worker_targets):
         if not worker_targets:
-            logger.debug("Exiftool worker received no targets; skipping")
+            logger.debug("Exiftool stay-open session received no targets; skipping")
             return
 
         def _consume_output_until_ready(proc, ready_marker):
@@ -930,7 +933,7 @@ def exif_sort(src, dest, args):
             "Starting exiftool processing for %d target(s)",
             len(worker_targets),
         )
-        logger.debug("Worker %s launching stay-open exiftool", _worker_id)
+        logger.debug("Launching stay-open exiftool session")
         proc = subprocess.Popen(
             ['exiftool', '-stay_open', 'True', '-@', '-'],
             stdin=subprocess.PIPE,
@@ -958,7 +961,7 @@ def exif_sort(src, dest, args):
 
         ran_any_job = False
         try:
-            logger.debug("Worker %s sending initial ready probe", _worker_id)
+            logger.debug("Sending initial ready probe to exiftool")
             proc.stdin.write(f"-echo3\n{ready_marker}\n-execute\n")
             proc.stdin.flush()
             _consume_output_until_ready(proc, ready_marker)
@@ -967,8 +970,7 @@ def exif_sort(src, dest, args):
                 current_targets = extra if extra is not None else worker_targets
                 if not current_targets:
                     logger.debug(
-                        "Worker %s skipping job (no targets): cmd=%s",
-                        _worker_id,
+                        "Skipping exiftool job (no targets): cmd=%s",
                         " ".join(cmd),
                     )
                     continue
@@ -978,8 +980,7 @@ def exif_sort(src, dest, args):
                 logger.info("Exiftool: %s", " ".join(full_cmd))
                 payload = "\n".join(full_cmd[1:])
                 logger.debug(
-                    "Worker %s sending payload to exiftool: %s",
-                    _worker_id,
+                    "Sending payload to exiftool: %s",
                     payload.replace("\n", " | "),
                 )
                 proc.stdin.write(
@@ -1256,7 +1257,7 @@ def exif_sort(src, dest, args):
         if not jobs:
             return False
 
-        run_worker(1, targets)
+        run_exiftool_stay_open(targets)
         result = True
     finally:
         os.chdir(cwd)
@@ -1381,29 +1382,16 @@ def pipeline(args, src):
 def _run_pipelines(args, sources):
     if not sources:
         return
-    cpu_count = os.cpu_count() or 1
-    max_workers = min(len(sources), cpu_count)
-    logger.debug(
-        "Pipeline threading plan: sources=%d, cpu_count=%d, max_workers=%d",
-        len(sources),
-        cpu_count,
-        max_workers,
-    )
     if len(sources) > 1 and args.move2targetdir:
         dest_root = os.path.expanduser(args.move2targetdir).rstrip('/') or '/'
         check_disk_space(sources, dest_root, args.dry_run)
-    if len(sources) == 1:
-        logger.debug("Single source detected; running pipeline sequentially without worker threads")
-        pipeline(args, sources[0])
-        return
-
     logger.info(
-        "Processing %d input directories sequentially", len(sources)
+        "Processing %d input director%s in strict sequence",
+        len(sources),
+        "y" if len(sources) == 1 else "ies",
     )
-    # Running sequentially avoids race conditions between pipelines that share
-    # output destinations, which previously caused some files to be skipped
-    # when worker threads operated in parallel.
-    for src in sources:
+    for index, src in enumerate(sources, start=1):
+        logger.debug("Running pipeline %d/%d for %s", index, len(sources), src)
         try:
             pipeline(args, src)
         except Exception as exc:  # pragma: no cover - defensive logging
