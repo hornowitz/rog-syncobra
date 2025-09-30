@@ -76,6 +76,7 @@ class CacheFailureTest(TestCase):
                     [root],
                     strip_metadata=True,
                     show_progress=False,
+                    delete=True,
                 )
 
             cache_data = json.loads(cache_path.read_text())
@@ -88,8 +89,48 @@ class CacheFailureTest(TestCase):
                     [root],
                     strip_metadata=True,
                     show_progress=False,
+                    delete=True,
                 )
                 self.assertTrue(
                     all(call.args[0] != target for call in file_hash_mock.mock_calls),
                     file_hash_mock.mock_calls,
                 )
+
+
+class CacheManagementTest(TestCase):
+    def test_does_not_create_cache_when_delete_not_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file_a = root / "a.bin"
+            file_b = root / "b.bin"
+            data = b"example"
+            file_a.write_bytes(data)
+            file_b.write_bytes(data)
+
+            cache_path = root / ".xxrdfind_cache.json"
+            xxrdfind.find_duplicates(
+                [root],
+                show_progress=False,
+                delete=False,
+            )
+
+            self.assertFalse(cache_path.exists())
+
+    def test_remove_cache_option_deletes_existing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_regular = root / ".xxrdfind_cache.json"
+            cache_stripped = root / ".xxrdfind_cache_stripped.json"
+            cache_regular.write_text("{}")
+            cache_stripped.write_text("{}")
+            (root / "file.bin").write_bytes(b"data")
+
+            xxrdfind.find_duplicates(
+                [root],
+                show_progress=False,
+                use_cache=False,
+                remove_cache_files=True,
+            )
+
+            self.assertFalse(cache_regular.exists())
+            self.assertFalse(cache_stripped.exists())
