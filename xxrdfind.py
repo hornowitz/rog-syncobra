@@ -17,6 +17,7 @@ Options:
     -s, --strip-metadata     Hash file content with metadata removed (default: include metadata).
     -r, --recursive          Recurse into subdirectories (default: enabled; use --no-recursive to disable).
     -c, --cache              Use persistent hash cache (default: enabled; use --no-cache to disable).
+        --remove-cache       Delete existing cache files before processing.
         --delete-within DIR  Restrict deletions to files under DIR (may be provided multiple times).
 """
 
@@ -85,6 +86,18 @@ def save_cache(root: Path, cache: dict, strip_metadata: bool) -> None:
         logger.debug("Saved cache %s (%d entries)", path, len(cache))
     except Exception as e:
         logger.warning("Failed to save cache %s: %s", path, e)
+
+
+def remove_cache(root: Path) -> None:
+    for suffix in ('', '_stripped'):
+        cache_path = root / f'.xxrdfind_cache{suffix}.json'
+        try:
+            cache_path.unlink()
+            logger.info("Removed cache %s", cache_path)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            logger.warning("Failed to remove cache %s: %s", cache_path, e)
 
 
 def file_hash(
@@ -206,7 +219,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                     strip_metadata: bool | str = False, recursive: bool = True, use_cache: bool = True,
                     delete_roots: list[Path] | None = None,
                     scan_workers: int | None = None,
-                    summary: DuplicateSummary | None = None) -> DuplicateSummary:
+                    summary: DuplicateSummary | None = None,
+                    remove_cache_files: bool = False) -> DuplicateSummary:
     summary = summary or DuplicateSummary()
     raw_files = list(iter_files(paths, recursive, scan_workers=scan_workers))
     logger.debug("Found %d files to process", len(raw_files))
@@ -233,6 +247,8 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
         passes = [bool(strip_metadata)]
 
     interrupted = False
+
+    removed_roots: set[Path] = set()
 
     for index, strip_flag in enumerate(passes):
         if len(passes) > 1:
@@ -263,10 +279,17 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                 logger.debug("Skipping already queued path %s", f)
                 continue
             seen_paths.add(resolved)
-            root_cache = f.parent if use_cache else root
+            cache_root = f.parent
+            if remove_cache_files and cache_root not in removed_roots:
+                remove_cache(cache_root)
+                removed_roots.add(cache_root)
+            root_cache = cache_root if use_cache else root
             root_map[f] = root_cache
             if use_cache and root_cache not in cache_map:
-                cache_map[root_cache] = load_cache(root_cache, strip_flag)
+                if remove_cache_files:
+                    cache_map[root_cache] = {}
+                else:
+                    cache_map[root_cache] = load_cache(root_cache, strip_flag)
             try:
                 stat = f.stat()
             except OSError as e:
@@ -430,9 +453,10 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
                 interrupted = True
                 logger.warning("Interrupted during duplicate verification; saving cache")
 
-        if use_cache:
+        if use_cache and delete:
             for root_cache, cache in cache_map.items():
-                save_cache(root_cache, cache, strip_flag)
+                if cache:
+                    save_cache(root_cache, cache, strip_flag)
 
         if interrupted:
             break
@@ -459,6 +483,8 @@ def main():
                    help="Hash file content with metadata removed")
     p.add_argument('-c', '--cache', action=argparse.BooleanOptionalAction, default=True,
                    help="Use persistent hash cache (use --no-cache to disable)")
+    p.add_argument('--remove-cache', action='store_true',
+                   help="Remove existing cache files before processing")
     p.add_argument('-r', '--recursive', action=argparse.BooleanOptionalAction, default=True,
                    help="Recurse into subdirectories (use --no-recursive to disable)")
     p.add_argument('--delete-within', action='append', default=None,
@@ -486,6 +512,7 @@ def main():
             recursive=args.recursive,
             use_cache=args.cache,
             delete_roots=[Path(p) for p in args.delete_within] if args.delete_within else None,
+            remove_cache_files=args.remove_cache,
         )
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
