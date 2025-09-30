@@ -49,6 +49,14 @@ UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS = {
 
 logger = logging.getLogger("xxrdfind")
 
+CACHE_SUFFIXES = ('', '_stripped')
+
+
+def cache_files_for_root(root: Path) -> list[Path]:
+    """Return all cache file paths that xxrdfind may create under *root*."""
+
+    return [root / f'.xxrdfind_cache{suffix}.json' for suffix in CACHE_SUFFIXES]
+
 
 @dataclass
 class DuplicateSummary:
@@ -89,8 +97,7 @@ def save_cache(root: Path, cache: dict, strip_metadata: bool) -> None:
 
 
 def remove_cache(root: Path) -> None:
-    for suffix in ('', '_stripped'):
-        cache_path = root / f'.xxrdfind_cache{suffix}.json'
+    for cache_path in cache_files_for_root(root):
         try:
             cache_path.unlink()
             logger.info("Removed cache %s", cache_path)

@@ -137,6 +137,7 @@ SCRIPT_FILES=(
     "rog-syncobra.py"
     "photoprism-watcher.py"
     "xxrdfind.py"
+    "xxrdfind_cache_tool.py"
 )
 MODULE_FILES=(
     "photoprism_api.py"
