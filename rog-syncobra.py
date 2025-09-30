@@ -696,6 +696,12 @@ def exif_sort(src, dest, args):
         skip_rel.add(rel_path)
         abs_path = _expand_path(os.path.join(src_abs, rel_path))
         skip_abs.add(abs_path)
+        if skip_marker:
+            logger.info(
+                "Skip marker %s present in %s; skipping directory",
+                skip_marker,
+                abs_path,
+            )
 
     if skip_marker:
         if os.path.exists(skip_marker):
@@ -774,7 +780,10 @@ def exif_sort(src, dest, args):
 
     if age_filter_args and cutoff_epoch is not None:
 
+        youngest_mtime: Optional[float] = None
+
         def _has_eligible_media() -> bool:
+            nonlocal youngest_mtime
             stack = [os.path.join(src_abs, target) for target in targets]
             seen_dirs = set()
             while stack:
@@ -796,6 +805,8 @@ def exif_sort(src, dest, args):
                                         mtime = entry.stat(follow_symlinks=False).st_mtime
                                     except FileNotFoundError:
                                         continue
+                                    if youngest_mtime is None or mtime > youngest_mtime:
+                                        youngest_mtime = mtime
                                     if mtime <= cutoff_epoch:
                                         return True
                                 elif args.recursive and entry.is_dir(follow_symlinks=False):
@@ -813,6 +824,15 @@ def exif_sort(src, dest, args):
             return False
 
         if not _has_eligible_media():
+            if youngest_mtime is not None:
+                cutoff_dt = datetime.fromtimestamp(cutoff_epoch)
+                newest_dt = datetime.fromtimestamp(youngest_mtime)
+                logger.info(
+                    "Newest media under %s is %s (cutoff %s); min-age filter active",
+                    src_abs,
+                    newest_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    cutoff_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                )
             logger.info(
                 "Skipping exiftool processing in %s (no media at least %d day(s) old)",
                 src_abs,
