@@ -45,6 +45,16 @@ MEDIA_SCAN_EXTS = (
     | DCIM_EXTS
 )
 
+WHATSAPP_IMAGE_IF_CLAUSE = (
+    r"( $filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ "
+    r"or $jfifversion=~/1\.01/i and ( "
+    r"$EncodingProcess=~/progressive/i "
+    r"or ( $EncodingProcess=~/baseline/i "
+    r"and $filename=~/^IMG_\d{4}\.jpe?g$/i "
+    r"and $ImageWidth<=1600 "
+    r"and $ImageHeight<=1600 ) ) )"
+)
+
 
 def _expand_path(path: str) -> str:
     """Return a normalized absolute path with user expansion."""
@@ -1099,7 +1109,7 @@ def exif_sort(src, dest, args):
             blocks = [
                 # WhatsApp Images (JPG)
                 (
-                    r"$filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
+                    WHATSAPP_IMAGE_IF_CLAUSE,
                     ['-ext', 'JPG'],
                     WHATSAPP_IMAGE_EXTS,
                     [
