@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
 import requests
@@ -139,29 +139,43 @@ def _strip_photoprism_prefixes(path: str, prefixes: Sequence[str]) -> str:
 
     cleaned = path
     leading_slash = cleaned.startswith('/')
-    normalized = cleaned.lstrip('/')
+    normalized_path = cleaned.replace('\\', '/')
+    candidate = PurePosixPath(normalized_path)
 
-    # Try the longest prefixes first so nested paths strip correctly.
-    unique_prefixes = {
-        p.strip() for p in prefixes if p and p.strip()
-    }
-    for prefix in sorted(unique_prefixes, key=len, reverse=True):
-        normalized_prefix = prefix.strip('/').strip()
-        if not normalized_prefix:
+    prefix_candidates: list[PurePosixPath] = []
+    seen: set[str] = set()
+    for prefix in prefixes:
+        if not prefix:
+            continue
+        cleaned_prefix = prefix.strip()
+        if not cleaned_prefix:
+            continue
+        normalized_prefix = cleaned_prefix.replace('\\', '/')
+        prefix_path = PurePosixPath(normalized_prefix)
+        key = prefix_path.as_posix()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        prefix_candidates.append(prefix_path)
+
+    if not prefix_candidates:
+        return path
+
+    for prefix_path in sorted(prefix_candidates, key=lambda value: len(value.as_posix()), reverse=True):
+        try:
+            relative = candidate.relative_to(prefix_path)
+        except ValueError:
             continue
 
-        candidate = normalized
-        if candidate == normalized_prefix:
-            normalized = ''
-            break
-        if candidate.startswith(normalized_prefix + '/'):
-            normalized = candidate[len(normalized_prefix) + 1 :]
-            break
+        relative_str = relative.as_posix()
+        if relative_str == '.':
+            relative_str = ''
 
-    if not normalized:
-        return '/' if leading_slash else ''
+        if leading_slash:
+            return '/' if not relative_str else '/' + relative_str
+        return relative_str
 
-    return f"/{normalized}" if leading_slash else normalized
+    return path
 
 
 def _parse_photoprism_task(raw: str) -> Optional[PhotoprismTask]:
