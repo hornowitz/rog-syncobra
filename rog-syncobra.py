@@ -10,7 +10,6 @@ import time
 import threading
 import queue
 import importlib.util
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1399,18 +1398,16 @@ def _run_pipelines(args, sources):
         return
 
     logger.info(
-        "Processing %d input directories in parallel with %d workers",
-        len(sources),
-        max_workers,
+        "Processing %d input directories sequentially", len(sources)
     )
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_src = {executor.submit(pipeline, args, src): src for src in sources}
-        for future in as_completed(future_to_src):
-            src = future_to_src[future]
-            try:
-                future.result()
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Pipeline for %s failed: %s", src, exc)
+    # Running sequentially avoids race conditions between pipelines that share
+    # output destinations, which previously caused some files to be skipped
+    # when worker threads operated in parallel.
+    for src in sources:
+        try:
+            pipeline(args, src)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Pipeline for %s failed: %s", src, exc)
 
 
 class _WatchdogUnavailableError(RuntimeError):
