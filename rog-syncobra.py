@@ -49,10 +49,7 @@ WHATSAPP_IMAGE_IF_CLAUSE = (
     r"( $filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ "
     r"or $jfifversion=~/1\.01/i and ( "
     r"$EncodingProcess=~/progressive/i "
-    r"or ( $EncodingProcess=~/baseline/i "
-    r"and $filename=~/^IMG_\d{4}\.jpe?g$/i "
-    r"and $ImageWidth<=1600 "
-    r"and $ImageHeight<=1600 ) ) )"
+    r"or $EncodingProcess=~/baseline/i ) ) )"
 )
 
 
