@@ -201,24 +201,41 @@ XXRDFIND_CONFIG: dict[str, Optional[int]] = {
 }
 
 
+def _resolve_worker_count(value: Optional[int]) -> int:
+    """Return a positive worker count, defaulting to the number of CPU cores."""
+
+    if value is None or value <= 0:
+        return max(os.cpu_count() or 1, 1)
+    return value
+
+
 def configure_xxrdfind(threads: Optional[int] = None, scan_threads: Optional[int] = None) -> None:
-    """Configure xxrdfind execution defaults for serialized execution."""
+    """Configure xxrdfind execution defaults for parallel execution."""
 
-    if threads not in (None, 1):
+    resolved_threads = _resolve_worker_count(threads)
+    resolved_scan_threads = _resolve_worker_count(scan_threads)
+
+    if threads is not None and threads <= 0:
         logger.warning(
-            "Ignoring xxrdfind thread override (%s); running sequentially with a single worker",
+            "Invalid xxrdfind thread override (%s); using CPU count (%d)",
             threads,
+            resolved_threads,
         )
-    if scan_threads not in (None, 1):
+    if scan_threads is not None and scan_threads <= 0:
         logger.warning(
-            "Ignoring xxrdfind scan thread override (%s); running sequentially with a single worker",
+            "Invalid xxrdfind scan thread override (%s); using CPU count (%d)",
             scan_threads,
+            resolved_scan_threads,
         )
 
-    XXRDFIND_CONFIG['threads'] = 1
-    XXRDFIND_CONFIG['scan_threads'] = 1
+    XXRDFIND_CONFIG['threads'] = resolved_threads
+    XXRDFIND_CONFIG['scan_threads'] = resolved_scan_threads
 
-    logger.debug("xxrdfind configured for serialized execution (threads=1, scan_threads=1)")
+    logger.debug(
+        "xxrdfind configured (threads=%d, scan_threads=%d)",
+        resolved_threads,
+        resolved_scan_threads,
+    )
 
 
 @dataclass
