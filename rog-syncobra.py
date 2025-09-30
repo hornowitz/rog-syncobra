@@ -1159,22 +1159,32 @@ def exif_sort(src, dest, args):
             '-ext', 'vob',
         ]
         queue(cmd, message="Misc vid processing")
-        cmd = [
+        dcim_common = [
             'exiftool', vflag,
             '-if','not defined $Keywords',
             '-if','not defined $Keys:Keywords',
-            '-Filename<${ModifyDate}%-c.%e',
-            '-Filename<${DateTimeOriginal}%-c.%e',
-            '-Filename<${CreateDate}%-c.%e',
-            '-Filename<${CreateDate} ${model}%-c.%e',
-            '-Filename<${CreationDate} ${model}%-c.%e',
-            '-Filename<${CreateDate}_$SubSecTimeOriginal ${model}%-c.%e',
-            '-Filename<${CreationDate}_$SubSecTimeOriginal ${model}%-c.%e',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext+','mpg','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
             '-ee'
         ]
+
+        cmd = [
+            *dcim_common,
+            '-Filename<${ModifyDate}%-c.%e',
+            '-Filename<${DateTimeOriginal}%-c.%e',
+            '-Filename<${CreateDate}%-c.%e',
+            '-Filename<${CreateDate} ${model}%-c.%e',
+            '-Filename<${CreateDate}_$SubSecTimeOriginal ${model}%-c.%e',
+        ]
         queue(cmd, message="DCIM processing")
+
+        creation_date_cmd = [
+            *dcim_common,
+            '-if','defined $CreationDate',
+            '-Filename<${CreationDate} ${model}%-c.%e',
+            '-Filename<${CreationDate}_$SubSecTimeOriginal ${model}%-c.%e',
+        ]
+        queue(creation_date_cmd)
         cmd = [
             'exiftool', vflag,
             '-if','not defined $Keywords and not defined $Keys:Keywords and not defined $model;',
