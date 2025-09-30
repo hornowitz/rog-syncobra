@@ -17,6 +17,15 @@ For metadata or raw-data deduplication an internal script `xxrdfind.py`
 external `rdfind` utility. Using its `--strip-metadata` option allows
 deduplication based solely on media content.
 
+If cached hashes become stale you can remove them with the helper
+`xxrdfind_cache_tool.py`. Run it against one or more directories to delete all
+`.xxrdfind_cache*.json` files, optionally with `--recursive` to walk subdirectories
+or `--dry-run` to preview the actions:
+
+```bash
+./xxrdfind_cache_tool.py --recursive /srv/media/incoming
+```
+
 To automatically install missing packages run:
 
 ```bash
