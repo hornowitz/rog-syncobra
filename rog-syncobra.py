@@ -73,6 +73,22 @@ def describe_extensions(exts):
     return ", ".join(sorted(e.lstrip('.').upper() for e in exts))
 
 
+def build_exiftool_extension_filters(exts: Sequence[str]) -> list[str]:
+    """Return a list of ``-ext`` arguments for exiftool.
+
+    The stay-open interface expects each argument on its own line, so this
+    helper keeps the construction of extension filters in one place and
+    guarantees deterministic ordering.  Exiftool wants raw extensions without
+    a leading dot; we normalise incoming values and convert them to upper case
+    to keep the generated commands easy to read in logs.
+    """
+
+    filters: list[str] = []
+    for ext in sorted(normalize_extensions(exts)):
+        filters.extend(['-ext', ext.lstrip('.').upper()])
+    return filters
+
+
 def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=None):
     targets = normalize_extensions(extensions)
     found = set()
@@ -1144,6 +1160,7 @@ def exif_sort(src, dest, args):
             queue(cmd, message=stage_message())
 
     if dcim_present:
+        dcim_ext_filters = build_exiftool_extension_filters(DCIM_EXTS - HEIC_EXTS)
         cmd = [
             'exiftool', vflag,
             '-if', 'not defined $Keywords',
@@ -1164,7 +1181,7 @@ def exif_sort(src, dest, args):
             '-if','not defined $Keywords',
             '-if','not defined $Keys:Keywords',
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-            '-ext+','mpg','-ext+','MTS','-ext+','VOB','-ext+','3GP','-ext+','AVI',
+            *dcim_ext_filters,
             '-ee'
         ]
 
