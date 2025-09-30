@@ -218,6 +218,20 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     assert result is True
 
     payloads = _extract_stay_open_payloads(instances)
+    dcim_payloads = [
+        payload
+        for payload in payloads
+        if '-Filename<${ModifyDate}%-c.%e' in payload
+    ]
+    assert dcim_payloads, "DCIM rename commands were not queued"
+    for payload in dcim_payloads:
+        extensions = [
+            payload[idx + 1]
+            for idx in range(len(payload) - 1)
+            if payload[idx] in ('-ext', '-ext+')
+        ]
+        assert 'JPG' in extensions, payload
+
     # Ensure that creation-date based renames are gated by a defined check
 
     creation_payloads = [payload for payload in payloads if any("${CreationDate" in part for part in payload)]
