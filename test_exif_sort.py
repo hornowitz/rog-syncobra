@@ -321,6 +321,14 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
         ]
         assert 'JPG' in extensions, payload
 
+    model_payloads = [
+        payload for payload in payloads if any('${Model}' in part for part in payload)
+    ]
+    assert model_payloads, 'Camera model rename command missing'
+    for payload in model_payloads:
+        assert any('defined $Model' in part for part in payload), payload
+        assert any('${Model}%-c.%e' in part for part in payload), payload
+
     # Ensure that creation-date based renames are gated by a defined check
 
     creation_payloads = [payload for payload in payloads if any("${CreationDate" in part for part in payload)]
