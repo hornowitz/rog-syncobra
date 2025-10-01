@@ -46,10 +46,16 @@ MEDIA_SCAN_EXTS = (
 )
 
 WHATSAPP_IMAGE_IF_CLAUSE = (
-    r"( $filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ "
+    "("
+    r"$filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ "
     r"or $jfifversion=~/1\.01/i and ( "
     r"$EncodingProcess=~/progressive/i "
-    r"or $EncodingProcess=~/baseline/i ) ) )"
+    r"or $EncodingProcess=~/baseline/i ) "
+    r"or ( $filename=~/^IMG_\d{4,}\.\w*/ "
+    r"and $jfifversion=~/1\.01/i "
+    r"and $ImageWidth<=1600 "
+    r"and $ImageHeight<=1600 )"
+    ")"
 )
 
 
