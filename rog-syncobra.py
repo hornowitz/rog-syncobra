@@ -1311,8 +1311,8 @@ def exif_sort(src, dest, args):
             [
                 *dcim_common,
                 '-if',
-                timestamp_condition,
-                f'-Filename<{timestamp_tag}%-c.%e',
+                f'defined $Model and defined $SubSecTimeOriginal and ({timestamp_condition})',
+                f'-Filename<{timestamp_tag}_$SubSecTimeOriginal ${{Model}}%-c.%e',
             ],
             message="DCIM processing",
         )
@@ -1330,8 +1330,8 @@ def exif_sort(src, dest, args):
             [
                 *dcim_common,
                 '-if',
-                f'defined $Model and defined $SubSecTimeOriginal and ({timestamp_condition})',
-                f'-Filename<{timestamp_tag}_$SubSecTimeOriginal ${{Model}}%-c.%e',
+                f'(not defined $Model or $Model eq "") and ({timestamp_condition})',
+                f'-Filename<{timestamp_tag}%-c.%e',
             ],
         )
 
