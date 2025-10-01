@@ -58,6 +58,17 @@ WHATSAPP_IMAGE_IF_CLAUSE = (
     ")"
 )
 
+WHATSAPP_VIDEO_IF_CLAUSE = (
+    "("
+    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ "
+    r"or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i"
+    ")"
+)
+
+WHATSAPP_ANY_IF_CLAUSE = (
+    f"({WHATSAPP_IMAGE_IF_CLAUSE} or {WHATSAPP_VIDEO_IF_CLAUSE})"
+)
+
 
 def _expand_path(path: str) -> str:
     """Return a normalized absolute path with user expansion."""
@@ -1088,81 +1099,81 @@ def exif_sort(src, dest, args):
     else:
         logger.info("Skipping screenshot flow (no %s media detected)", screenshot_desc)
 
-    if args.whatsapp:
-        whatsapp_desc = describe_extensions(WHATSAPP_IMAGE_EXTS | WHATSAPP_VIDEO_EXTS)
-        if not (whatsapp_image_present or whatsapp_video_present):
-            logger.info(
-                "Skipping WhatsApp processing (no %s media detected)", whatsapp_desc
-            )
-        else:
-            logger.debug("Scheduling WhatsApp processing jobs")
-            whatsapp_logged = False
+    whatsapp_desc = describe_extensions(WHATSAPP_IMAGE_EXTS | WHATSAPP_VIDEO_EXTS)
 
-            def stage_message():
-                nonlocal whatsapp_logged
-                if whatsapp_logged:
-                    return None
-                whatsapp_logged = True
-                return "WhatsApp processing"
+    def _queue_whatsapp_jobs(apply_tagging: bool) -> None:
+        logger.debug(
+            "Scheduling WhatsApp processing jobs%s",
+            "" if apply_tagging else " (tagging disabled)",
+        )
+        whatsapp_logged = False
 
-            whatsapp_keywords_condition = '$Keywords=~/whatsapp/i'
-            whatsapp_subject_condition = '$XMP:Subject=~/whatsapp/i'
-            whatsapp_keys_keywords_condition = '$Keys:Keywords=~/whatsapp/i'
+        def stage_message():
+            nonlocal whatsapp_logged
+            if whatsapp_logged:
+                return None
+            whatsapp_logged = True
+            return "WhatsApp processing"
 
-            blocks = [
-                # WhatsApp Images (JPG)
-                (
-                    WHATSAPP_IMAGE_IF_CLAUSE,
-                    ['-ext', 'JPG'],
-                    WHATSAPP_IMAGE_EXTS,
-                    [
-                        ('-Keywords+=WhatsApp', whatsapp_keywords_condition),
-                        ('-XMP-dc:Subject+=WhatsApp', whatsapp_subject_condition),
-                    ],
-                ),
-                # WhatsApp Videos (MP4 + MOV)
-                (
-                    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
-                    ['-ext', 'MP4', '-ext', 'MOV'],
-                    WHATSAPP_VIDEO_EXTS,
-                    [
-                        ('-Keywords=WhatsApp', whatsapp_keywords_condition),
-                        ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
-                        ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
-                    ],
-                ),
-                # WhatsApp Videos (3GP)
-                (
-                    r"$filename=~/^VID-\d{8}-WA\d{4}\.\w*/ or $jfifversion=~/1\.01/i and $EncodingProcess=~/progressive/i",
-                    ['-ext', '3GP'],
-                    {'.3gp'},
-                    [
-                        ('-Keywords=WhatsApp', whatsapp_keywords_condition),
-                        ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
-                        ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
-                    ],
-                ),
+        whatsapp_keywords_condition = '$Keywords=~/whatsapp/i'
+        whatsapp_subject_condition = '$XMP:Subject=~/whatsapp/i'
+        whatsapp_keys_keywords_condition = '$Keys:Keywords=~/whatsapp/i'
 
-            ]
-            for cond, exts, required, tag_updates in blocks:
-                if required and not has_matching_media(present_exts, required):
-                    logger.debug(
-                        "Skipping WhatsApp rule %s (no %s media)",
-                        cond,
-                        describe_extensions(required),
-                    )
-                    continue
-                base_cmd = _exiftool_cmd(
-                    '-if', cond,
-                    '-AllDates<FileModifyDate',
-                    '-CreateDate<FileModifyDate',
-                    '-ModifyDate<FileModifyDate',
-                    '-DateTimeOriginal<FileModifyDate',
-                    '-FileModifyDate<FileModifyDate',
-                    '-overwrite_original_in_place','-P','-fast2', *exts
+        blocks = [
+            # WhatsApp Images (JPG)
+            (
+                WHATSAPP_IMAGE_IF_CLAUSE,
+                ['-ext', 'JPG'],
+                WHATSAPP_IMAGE_EXTS,
+                [
+                    ('-Keywords+=WhatsApp', whatsapp_keywords_condition),
+                    ('-XMP-dc:Subject+=WhatsApp', whatsapp_subject_condition),
+                ],
+            ),
+            # WhatsApp Videos (MP4 + MOV)
+            (
+                WHATSAPP_VIDEO_IF_CLAUSE,
+                ['-ext', 'MP4', '-ext', 'MOV'],
+                WHATSAPP_VIDEO_EXTS,
+                [
+                    ('-Keywords=WhatsApp', whatsapp_keywords_condition),
+                    ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
+                    ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
+                ],
+            ),
+            # WhatsApp Videos (3GP)
+            (
+                WHATSAPP_VIDEO_IF_CLAUSE,
+                ['-ext', '3GP'],
+                {'.3gp'},
+                [
+                    ('-Keywords=WhatsApp', whatsapp_keywords_condition),
+                    ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
+                    ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
+                ],
+            ),
+
+        ]
+        for cond, exts, required, tag_updates in blocks:
+            if required and not has_matching_media(present_exts, required):
+                logger.debug(
+                    "Skipping WhatsApp rule %s (no %s media)",
+                    cond,
+                    describe_extensions(required),
                 )
-                queue(base_cmd, message=stage_message())
+                continue
+            base_cmd = _exiftool_cmd(
+                '-if', cond,
+                '-AllDates<FileModifyDate',
+                '-CreateDate<FileModifyDate',
+                '-ModifyDate<FileModifyDate',
+                '-DateTimeOriginal<FileModifyDate',
+                '-FileModifyDate<FileModifyDate',
+                '-overwrite_original_in_place','-P','-fast2', *exts
+            )
+            queue(base_cmd, message=stage_message())
 
+            if apply_tagging:
                 for tag_update, existing_condition in tag_updates:
                     cmd = _exiftool_cmd(
                         '-if', cond,
@@ -1172,39 +1183,90 @@ def exif_sort(src, dest, args):
                     )
                     queue(cmd, message=stage_message())
 
-            whatsapp_tag_condition = (
+        if apply_tagging:
+            whatsapp_condition = (
                 '$Keywords=~/whatsapp/i or $XMP:Subject=~/whatsapp/i '
                 'or $Keys:Keywords=~/whatsapp/i'
             )
-            cmd = _exiftool_cmd(
-                '-if', whatsapp_tag_condition,
-                '-if','not defined $CreateDate',
-                '-CreateDate<FileModifyDate',
-                '-overwrite_original_in_place','-P','-fast2',
-                '-ext+','JPG','-ext+','MP4','-ext+','3GP'
+        else:
+            whatsapp_condition = None
+
+        def _conditional_args(condition: Optional[str]) -> list[str]:
+            return ['-if', condition] if condition else []
+
+        if apply_tagging:
+            queue(
+                _exiftool_cmd(
+                    '-if', whatsapp_condition,
+                    '-if','not defined $CreateDate',
+                    '-CreateDate<FileModifyDate',
+                    '-overwrite_original_in_place','-P','-fast2',
+                    '-ext+','JPG','-ext+','MP4','-ext+','3GP'
+                ),
+                message=stage_message(),
             )
-            queue(cmd, message=stage_message())
-            cmd = _exiftool_cmd(
-                '-if', whatsapp_tag_condition,
+        else:
+            for cond, exts in (
+                (WHATSAPP_IMAGE_IF_CLAUSE, ['-ext+','JPG','-ext+','JPEG']),
+                (WHATSAPP_VIDEO_IF_CLAUSE, ['-ext+','MP4','-ext+','MOV','-ext+','3GP']),
+            ):
+                cmd = _exiftool_cmd(
+                    '-if', cond,
+                    '-if','not defined $CreateDate',
+                    '-CreateDate<FileModifyDate',
+                    '-overwrite_original_in_place','-P','-fast2',
+                    *exts,
+                )
+                queue(cmd, message=stage_message())
+
+        video_condition = (
+            whatsapp_condition if apply_tagging else WHATSAPP_VIDEO_IF_CLAUSE
+        )
+        queue(
+            _exiftool_cmd(
+                *_conditional_args(video_condition),
                 '-FileName<${FileModifyDate} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
-            )
-            queue(cmd, message=stage_message())
-            cmd = _exiftool_cmd(
-                '-if', whatsapp_tag_condition,
+            ),
+            message=stage_message(),
+        )
+        queue(
+            _exiftool_cmd(
+                *_conditional_args(video_condition),
                 '-Directory<$FileModifyDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
-            )
-            queue(cmd, message=stage_message())
-            cmd = _exiftool_cmd(
-                '-if', whatsapp_tag_condition,
+            ),
+            message=stage_message(),
+        )
+
+        image_condition = (
+            whatsapp_condition if apply_tagging else WHATSAPP_IMAGE_IF_CLAUSE
+        )
+        queue(
+            _exiftool_cmd(
+                *_conditional_args(image_condition),
                 '-Directory<$FileModifyDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','JPG','-ext+','JPEG'
+            ),
+            message=stage_message(),
+        )
+
+    whatsapp_present = whatsapp_image_present or whatsapp_video_present
+    if args.whatsapp:
+        if not whatsapp_present:
+            logger.info(
+                "Skipping WhatsApp processing (no %s media detected)", whatsapp_desc
             )
-            queue(cmd, message=stage_message())
+        else:
+            _queue_whatsapp_jobs(apply_tagging=True)
+    elif whatsapp_present:
+        logger.info(
+            "Detected %s without --whatsapp; auto-classifying as WhatsApp", whatsapp_desc
+        )
+        _queue_whatsapp_jobs(apply_tagging=False)
 
     if dcim_present:
         dcim_ext_filters = build_exiftool_extension_filters(DCIM_EXTS - HEIC_EXTS)
@@ -1281,6 +1343,7 @@ def exif_sort(src, dest, args):
         queue(creation_date_cmd)
         cmd = _exiftool_cmd(
             '-if','not defined $Keywords and not defined $Keys:Keywords and not defined $model;',
+            '-if', f'not {WHATSAPP_ANY_IF_CLAUSE}',
             '-Directory<$FileModifyDate/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         )
