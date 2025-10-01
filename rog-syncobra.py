@@ -1247,6 +1247,15 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(image_condition),
+                '-FileName<${FileModifyDate} WhatsApp%-c.%e',
+                '-d', "%Y-%m-%d %H-%M-%S",
+                '-ext+','JPG','-ext+','JPEG'
+            ),
+            message=stage_message(),
+        )
+        queue(
+            _exiftool_cmd(
+                *_conditional_args(image_condition),
                 '-Directory<$FileModifyDate/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','JPG','-ext+','JPEG'
