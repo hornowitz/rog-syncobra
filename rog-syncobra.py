@@ -1279,9 +1279,11 @@ def exif_sort(src, dest, args):
 
     if dcim_present:
         dcim_ext_filters = build_exiftool_extension_filters(DCIM_EXTS - HEIC_EXTS)
+        whatsapp_keyword_guard = (
+            'not ($Keywords=~/whatsapp/i or $Keys:Keywords=~/whatsapp/i)'
+        )
         cmd = _exiftool_cmd(
-            '-if', 'not defined $Keywords',
-            '-if', 'not defined $Keys:Keywords',
+            '-if', whatsapp_keyword_guard,
             '-if', 'not defined $model',
             "-FileName<${FileModifyDate}%-c.%e",
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
@@ -1294,8 +1296,7 @@ def exif_sort(src, dest, args):
         )
         queue(cmd, message="Misc vid processing")
         dcim_common = _exiftool_cmd(
-            '-if','not defined $Keywords',
-            '-if','not defined $Keys:Keywords',
+            '-if', whatsapp_keyword_guard,
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             *dcim_ext_filters,
             '-ee'
@@ -1351,7 +1352,7 @@ def exif_sort(src, dest, args):
         ]
         queue(creation_date_cmd)
         cmd = _exiftool_cmd(
-            '-if','not defined $Keywords and not defined $Keys:Keywords and not defined $model;',
+            '-if', f'{whatsapp_keyword_guard} and not defined $model;',
             '-if', f'not {WHATSAPP_ANY_IF_CLAUSE}',
             '-Directory<$FileModifyDate/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
