@@ -1284,7 +1284,7 @@ def exif_sort(src, dest, args):
         )
         cmd = _exiftool_cmd(
             '-if', whatsapp_keyword_guard,
-            '-if', 'not defined $model',
+            '-if', 'not defined $Model',
             "-FileName<${FileModifyDate}%-c.%e",
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext', 'mp4',
@@ -1321,8 +1321,8 @@ def exif_sort(src, dest, args):
             [
                 *dcim_common,
                 '-if',
-                f'defined $model and ({timestamp_condition})',
-                f'-Filename<{timestamp_tag} ${{model}}%-c.%e',
+                f'defined $Model and ({timestamp_condition})',
+                f'-Filename<{timestamp_tag} ${{Model}}%-c.%e',
             ],
         )
 
@@ -1330,8 +1330,8 @@ def exif_sort(src, dest, args):
             [
                 *dcim_common,
                 '-if',
-                f'defined $SubSecTimeOriginal and ({timestamp_condition})',
-                f'-Filename<{timestamp_tag}_$SubSecTimeOriginal ${{model}}%-c.%e',
+                f'defined $Model and defined $SubSecTimeOriginal and ({timestamp_condition})',
+                f'-Filename<{timestamp_tag}_$SubSecTimeOriginal ${{Model}}%-c.%e',
             ],
         )
 
@@ -1345,14 +1345,14 @@ def exif_sort(src, dest, args):
         )
         creation_date_cmd = [
             *dcim_common,
-            '-if', creation_date_condition,
-            f'-Filename<{creation_date_tag} ${{model}}%-c.%e',
-            f'-Filename<{creation_date_tag}_$SubSecTimeOriginal ${{model}}%-c.%e',
+            '-if', f'defined $Model and ({creation_date_condition})',
+            f'-Filename<{creation_date_tag} ${{Model}}%-c.%e',
+            f'-Filename<{creation_date_tag}_$SubSecTimeOriginal ${{Model}}%-c.%e',
 
         ]
         queue(creation_date_cmd)
         cmd = _exiftool_cmd(
-            '-if', f'{whatsapp_keyword_guard} and not defined $model;',
+            '-if', f'{whatsapp_keyword_guard} and not defined $Model',
             '-if', f'not {WHATSAPP_ANY_IF_CLAUSE}',
             '-Directory<$FileModifyDate/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
