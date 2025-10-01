@@ -313,13 +313,14 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     ]
     assert dcim_payloads, "DCIM rename commands were not queued"
     for payload in dcim_payloads:
-        assert timestamp_condition in payload
+        assert any(timestamp_condition in part for part in payload)
         extensions = [
             payload[idx + 1]
             for idx in range(len(payload) - 1)
             if payload[idx] in ('-ext', '-ext+')
         ]
         assert 'JPG' in extensions, payload
+        assert any('not defined $Model or $Model eq ""' in part for part in payload), payload
 
     model_payloads = [
         payload for payload in payloads if any('${Model}' in part for part in payload)
