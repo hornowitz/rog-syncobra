@@ -302,13 +302,18 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     assert result is True
 
     payloads = _extract_stay_open_payloads(instances)
+    timestamp_tag = '${CreateDate;DateTimeOriginal;ModifyDate}'
+    timestamp_condition = (
+        'defined $CreateDate or defined $DateTimeOriginal or defined $ModifyDate'
+    )
     dcim_payloads = [
         payload
         for payload in payloads
-        if '-Filename<${ModifyDate}%-c.%e' in payload
+        if f'-Filename<{timestamp_tag}%-c.%e' in payload
     ]
     assert dcim_payloads, "DCIM rename commands were not queued"
     for payload in dcim_payloads:
+        assert timestamp_condition in payload
         extensions = [
             payload[idx + 1]
             for idx in range(len(payload) - 1)
@@ -328,9 +333,12 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
             for part in payload
         ), payload
 
-
-    base_payloads = [payload for payload in payloads if any("${CreateDate}_$SubSecTimeOriginal" in part for part in payload)]
-    assert base_payloads, "CreateDate rename command missing"
+    subsec_payloads = [
+        payload
+        for payload in payloads
+        if any(f"{timestamp_tag}_$SubSecTimeOriginal" in part for part in payload)
+    ]
+    assert subsec_payloads, "Sub-second rename command missing"
 
 @pytest.mark.parametrize(
     "warning_message",
