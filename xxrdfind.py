@@ -305,10 +305,20 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             all_files.append((f, root_cache, stat))
             size_groups[stat.st_size].append(f)
 
-        hash_candidates = [entry for entry in all_files if len(size_groups[entry[2].st_size]) > 1]
-        if logger.isEnabledFor(logging.DEBUG):
-            skipped = len(all_files) - len(hash_candidates)
-            logger.debug("Skipping hashing for %d files with unique sizes", skipped)
+        if strip_flag:
+            hash_candidates = all_files
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "strip_metadata enabled; hashing all %d files regardless of size",
+                    len(all_files),
+                )
+        else:
+            hash_candidates = [
+                entry for entry in all_files if len(size_groups[entry[2].st_size]) > 1
+            ]
+            if logger.isEnabledFor(logging.DEBUG):
+                skipped = len(all_files) - len(hash_candidates)
+                logger.debug("Skipping hashing for %d files with unique sizes", skipped)
 
         hash_map: defaultdict[str, list[Path]] = defaultdict(list)
         worker_count = threads if threads and threads > 0 else (os.cpu_count() or 1)

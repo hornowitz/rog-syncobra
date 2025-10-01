@@ -97,6 +97,33 @@ class CacheFailureTest(TestCase):
                 )
 
 
+class StripMetadataHashingTest(TestCase):
+    def test_hashes_unique_size_files_when_stripping_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.jpg"
+            second = root / "second.jpg"
+            first.write_bytes(b"a")
+            second.write_bytes(b"bb")
+
+            hashed_paths: list[Path] = []
+
+            def fake_file_hash(path, strip_metadata=False, algorithm='xxh64'):
+                if algorithm == 'xxh64':
+                    hashed_paths.append(path)
+                    return path, f"digest-{path.name}", None
+                return path, f"strong-{path.name}", None
+
+            with patch("xxrdfind.file_hash", side_effect=fake_file_hash):
+                xxrdfind.find_duplicates(
+                    [root],
+                    strip_metadata=True,
+                    show_progress=False,
+                )
+
+            self.assertCountEqual(hashed_paths, [first, second])
+
+
 class CacheManagementTest(TestCase):
     def test_does_not_create_cache_when_delete_not_selected(self):
         with tempfile.TemporaryDirectory() as tmp:
