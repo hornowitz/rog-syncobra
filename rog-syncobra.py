@@ -1280,7 +1280,11 @@ def exif_sort(src, dest, args):
     if dcim_present:
         dcim_ext_filters = build_exiftool_extension_filters(DCIM_EXTS - HEIC_EXTS)
         whatsapp_keyword_guard = (
-            'not ($Keywords=~/whatsapp/i or $Keys:Keywords=~/whatsapp/i)'
+            'not ('
+            ' (defined $Keywords and $Keywords=~/whatsapp/i)'
+            ' or (defined $Keys:Keywords and $Keys:Keywords=~/whatsapp/i)'
+            ' or (defined $XMP:Subject and $XMP:Subject=~/whatsapp/i)'
+            ')'
         )
         cmd = _exiftool_cmd(
             '-if', whatsapp_keyword_guard,
