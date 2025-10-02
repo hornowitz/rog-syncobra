@@ -321,6 +321,14 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
         ]
         assert 'JPG' in extensions, payload
         assert any('not defined $Model or $Model eq ""' in part for part in payload), payload
+        guard = (
+            'not ('
+            ' (defined $Keywords and $Keywords=~/whatsapp/i)'
+            ' or (defined $Keys:Keywords and $Keys:Keywords=~/whatsapp/i)'
+            ' or (defined $XMP:Subject and $XMP:Subject=~/whatsapp/i)'
+            ')'
+        )
+        assert any(guard in part for part in payload), payload
 
     model_payloads = [
         payload for payload in payloads if any('${Model}' in part for part in payload)
