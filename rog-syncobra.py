@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
-import xxrdfind
+import xxdedupi
 
 try:  # pragma: no cover - optional dependency import
     from watchdog.events import FileSystemEventHandler
@@ -219,7 +219,7 @@ except Exception:
 # ────────────────────────────────────────────────────────────────────────────────
 
 
-XXRDFIND_CONFIG: dict[str, Optional[int]] = {
+XXDEDUPI_CONFIG: dict[str, Optional[int]] = {
     'threads': None,
     'scan_threads': None,
 }
@@ -233,30 +233,30 @@ def _resolve_worker_count(value: Optional[int]) -> int:
     return value
 
 
-def configure_xxrdfind(threads: Optional[int] = None, scan_threads: Optional[int] = None) -> None:
-    """Configure xxrdfind execution defaults for parallel execution."""
+def configure_xxdedupi(threads: Optional[int] = None, scan_threads: Optional[int] = None) -> None:
+    """Configure xxdedupi execution defaults for parallel execution."""
 
     resolved_threads = _resolve_worker_count(threads)
     resolved_scan_threads = _resolve_worker_count(scan_threads)
 
     if threads is not None and threads <= 0:
         logger.warning(
-            "Invalid xxrdfind thread override (%s); using CPU count (%d)",
+            "Invalid xxdedupi thread override (%s); using CPU count (%d)",
             threads,
             resolved_threads,
         )
     if scan_threads is not None and scan_threads <= 0:
         logger.warning(
-            "Invalid xxrdfind scan thread override (%s); using CPU count (%d)",
+            "Invalid xxdedupi scan thread override (%s); using CPU count (%d)",
             scan_threads,
             resolved_scan_threads,
         )
 
-    XXRDFIND_CONFIG['threads'] = resolved_threads
-    XXRDFIND_CONFIG['scan_threads'] = resolved_scan_threads
+    XXDEDUPI_CONFIG['threads'] = resolved_threads
+    XXDEDUPI_CONFIG['scan_threads'] = resolved_scan_threads
 
     logger.debug(
-        "xxrdfind configured (threads=%d, scan_threads=%d)",
+        "xxdedupi configured (threads=%d, scan_threads=%d)",
         resolved_threads,
         resolved_scan_threads,
     )
@@ -342,9 +342,9 @@ def set_logging_verbosity(enable_debug: bool) -> None:
     for handler in LOG_HANDLERS:
         handler.setLevel(level)
 
-    # Mirror the verbosity settings onto the xxrdfind logger so that
+    # Mirror the verbosity settings onto the xxdedupi logger so that
     # dedupe operations provide matching detail when verbose/debug is enabled.
-    xx_logger = logging.getLogger('xxrdfind')
+    xx_logger = logging.getLogger('xxdedupi')
     xx_logger.setLevel(level)
     xx_logger.propagate = False
     for handler in LOG_HANDLERS:
@@ -396,8 +396,8 @@ ENV_VALUE_FLAGS: dict[str, dict[str, Union[str, bool]]] = {
     'ARCHIVE_YEARS': {'flag': '--archive-years'},
     'SKIP_MARKER': {'flag': '--skip-marker', 'allow_empty': True},
     'MIN_AGE_DAYS': {'flag': '--min-age-days'},
-    'XXRDFIND_THREADS': {'flag': '--xxrdfind-threads'},
-    'XXRDFIND_SCAN_THREADS': {'flag': '--xxrdfind-scan-threads'},
+    'XXDEDUPI_THREADS': {'flag': '--xxdedupi-threads'},
+    'XXDEDUPI_SCAN_THREADS': {'flag': '--xxdedupi-scan-threads'},
 }
 
 
@@ -496,10 +496,10 @@ def parse_args():
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
                    help="Verify current year dir under destination is a mountpoint")
-    p.add_argument('--xxrdfind-threads', type=int, default=None,
-                   help="Override worker threads for xxrdfind (default: auto)")
-    p.add_argument('--xxrdfind-scan-threads', type=int, default=None,
-                   help="Override directory scan threads for xxrdfind (default: auto)")
+    p.add_argument('--xxdedupi-threads', type=int, default=None,
+                   help="Override worker threads for xxdedupi (default: auto)")
+    p.add_argument('--xxdedupi-scan-threads', type=int, default=None,
+                   help="Override directory scan threads for xxdedupi (default: auto)")
     p.add_argument('-m','--move2targetdir', metavar='DIR', default='',
                    help="Destination directory for processed files")
     p.add_argument('-w','--whatsapp', action='store_true',
@@ -635,7 +635,7 @@ def check_year_mount(dest):
         sys.exit(1)
     logger.info(f"Verified mountpoint for {year_dir}")
 
-def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=None):
+def xxdedupi_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=None):
     path_strings = [str(p) for p in paths]
     details = []
     mode = strip_metadata
@@ -644,8 +644,8 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
     elif mode:
         details.append('strip_metadata')
     delete_within_strings = [str(root) for root in delete_within] if delete_within else []
-    threads = XXRDFIND_CONFIG.get('threads')
-    scan_workers = XXRDFIND_CONFIG.get('scan_threads')
+    threads = XXDEDUPI_CONFIG.get('threads')
+    scan_workers = XXDEDUPI_CONFIG.get('scan_threads')
     if threads is not None:
         details.append(f"threads={threads}")
     if scan_workers is not None:
@@ -653,13 +653,13 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
     if delete_within_strings:
         details.append(f"delete_within={', '.join(delete_within_strings)}")
     detail_str = f" ({'; '.join(details)})" if details else ''
-    logger.info("xxrdfind dedupe: %s%s", " ".join(path_strings), detail_str)
+    logger.info("xxdedupi dedupe: %s%s", " ".join(path_strings), detail_str)
     if dry_run:
-        logger.info("Dry run: skipping xxrdfind execution")
-        return xxrdfind.DuplicateSummary()
+        logger.info("Dry run: skipping xxdedupi execution")
+        return xxdedupi.DuplicateSummary()
 
     delete_roots = [Path(root) for root in delete_within_strings] if delete_within_strings else None
-    summary = xxrdfind.find_duplicates(
+    summary = xxdedupi.find_duplicates(
         [Path(p) for p in path_strings],
         delete=True,
         dry_run=dry_run,
@@ -676,8 +676,8 @@ def xxrdfind_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
 
 def metadata_dedupe(path, dry_run=False):
     prefix = "[DRY] " if dry_run else ""
-    logger.info(f"{prefix}Metadata dedupe via xxrdfind: {path}")
-    xxrdfind_dedupe([path], dry_run=dry_run, strip_metadata=False)
+    logger.info(f"{prefix}Metadata dedupe via xxdedupi: {path}")
+    xxdedupi_dedupe([path], dry_run=dry_run, strip_metadata=False)
 
 
 def metadata_dedupe_source_against_dest(src, dest, dry_run=False):
@@ -685,11 +685,11 @@ def metadata_dedupe_source_against_dest(src, dest, dry_run=False):
     dest_abs = _expand_path(dest)
     prefix = "[DRY] " if dry_run else ""
     message = (
-        f"{prefix}Metadata dedupe via xxrdfind between destination ({dest_abs}) "
+        f"{prefix}Metadata dedupe via xxdedupi between destination ({dest_abs}) "
         f"and source ({src_abs}); deleting duplicates from source"
     )
     logger.info(message)
-    xxrdfind_dedupe(
+    xxdedupi_dedupe(
         [dest_abs, src_abs],
         dry_run=dry_run,
         strip_metadata=False,
@@ -706,9 +706,9 @@ def raw_dedupe(src, dest, dry_run=False, *_, **__):
     paths.append(src_abs)
     prefix = "[DRY] " if dry_run else ""
     logger.info(
-        f"{prefix}Raw dedupe via xxrdfind (including metadata pass): {' '.join(paths)}"
+        f"{prefix}Raw dedupe via xxdedupi (including metadata pass): {' '.join(paths)}"
     )
-    xxrdfind_dedupe(paths, dry_run=dry_run, strip_metadata='both')
+    xxdedupi_dedupe(paths, dry_run=dry_run, strip_metadata='both')
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
@@ -1694,7 +1694,7 @@ def _run_watch_mode(args, inputdirs: Sequence[str]) -> None:
 def main():
     _inject_env_cli_args()
     args = parse_args()
-    configure_xxrdfind(args.xxrdfind_threads, args.xxrdfind_scan_threads)
+    configure_xxdedupi(args.xxdedupi_threads, args.xxdedupi_scan_threads)
     set_logging_verbosity(args.debug or getattr(args, 'verbose', False))
     if args.install_deps:
         install_requirements()

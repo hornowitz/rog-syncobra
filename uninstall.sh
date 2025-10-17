@@ -94,7 +94,8 @@ prune_dir_if_empty() {
 SCRIPT_FILES=(
     "rog-syncobra.py"
     "photoprism-watcher.py"
-    "xxrdfind.py"
+    "xxdedupi.py"
+    "xxdedupi_cache_tool.py"
     "photoprism_api.py"
 )
 

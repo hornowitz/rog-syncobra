@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-xxrdfind.py - xxhash64-based duplicate finder with optional persistent hashing
+xxdedupi.py - xxhash64-based duplicate finder with optional persistent hashing
 cache, logging, dry-run, multithreading and progress display. Designed as a
 lightweight replacement for rdfind for use within rog-syncobra.
 
 Usage:
-    ./xxrdfind.py [options] DIR [DIR ...]
+    ./xxdedupi.py [options] DIR [DIR ...]
 
 Options:
     -d, --delete             Remove duplicate files, keeping first instance (default: keep files).
@@ -47,15 +47,15 @@ UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS = {
     ".vob",
 }
 
-logger = logging.getLogger("xxrdfind")
+logger = logging.getLogger("xxdedupi")
 
 CACHE_SUFFIXES = ('', '_stripped')
 
 
 def cache_files_for_root(root: Path) -> list[Path]:
-    """Return all cache file paths that xxrdfind may create under *root*."""
+    """Return all cache file paths that xxdedupi may create under *root*."""
 
-    return [root / f'.xxrdfind_cache{suffix}.json' for suffix in CACHE_SUFFIXES]
+    return [root / f'.xxdedupi_cache{suffix}.json' for suffix in CACHE_SUFFIXES]
 
 
 @dataclass
@@ -70,7 +70,7 @@ def _format_paths(paths: list[Path]) -> str:
 
 def _cache_file(root: Path, strip_metadata: bool) -> Path:
     suffix = '_stripped' if strip_metadata else ''
-    return root / f'.xxrdfind_cache{suffix}.json'
+    return root / f'.xxdedupi_cache{suffix}.json'
 
 
 def load_cache(root: Path, strip_metadata: bool) -> dict:
@@ -275,7 +275,7 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
 
         for f, root in raw_files:
             try:
-                if f.name.startswith('.xxrdfind_cache') and f.suffix == '.json':
+                if f.name.startswith('.xxdedupi_cache') and f.suffix == '.json':
                     logger.debug("Skipping cache file %s", f)
                     continue
                 resolved = f.resolve()
