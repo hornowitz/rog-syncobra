@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Utility to remove cached hashes produced by :mod:`xxrdfind`."""
+"""Utility to remove cached hashes produced by :mod:`xxdedupi`."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ import logging
 from pathlib import Path
 from typing import Iterable
 
-import xxrdfind
+import xxdedupi
 
-logger = logging.getLogger("xxrdfind-cache-tool")
-CACHE_FILENAMES = tuple(path.name for path in xxrdfind.cache_files_for_root(Path(".")))
+logger = logging.getLogger("xxdedupi-cache-tool")
+CACHE_FILENAMES = tuple(path.name for path in xxdedupi.cache_files_for_root(Path(".")))
 
 
 def _normalize_path(raw: str) -> Path:
@@ -33,7 +33,7 @@ def _discover_cache_files(root: Path, recursive: bool) -> set[Path]:
                 if candidate.is_file():
                     caches.add(candidate)
     else:
-        for cache_path in xxrdfind.cache_files_for_root(root):
+        for cache_path in xxdedupi.cache_files_for_root(root):
             if cache_path.is_file():
                 caches.add(cache_path)
 
@@ -41,7 +41,7 @@ def _discover_cache_files(root: Path, recursive: bool) -> set[Path]:
 
 
 def remove_cache_files(paths: Iterable[str], recursive: bool = False, dry_run: bool = False) -> int:
-    """Remove xxrdfind cache files under ``paths``.
+    """Remove xxdedupi cache files under ``paths``.
 
     Returns the number of cache files that were removed (or would be removed
     during a dry-run).
@@ -76,7 +76,7 @@ def remove_cache_files(paths: Iterable[str], recursive: bool = False, dry_run: b
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Remove xxrdfind cache files (.xxrdfind_cache*.json)."
+        description="Remove xxdedupi cache files (.xxdedupi_cache*.json)."
     )
     parser.add_argument(
         "paths",

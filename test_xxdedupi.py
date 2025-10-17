@@ -36,7 +36,7 @@ if "tqdm" not in sys.modules:
     tqdm_module.tqdm = _tqdm
     sys.modules["tqdm"] = tqdm_module
 
-import xxrdfind
+import xxdedupi
 
 
 class FileHashTest(TestCase):
@@ -45,9 +45,9 @@ class FileHashTest(TestCase):
             video_path = Path(tmp) / "example.mkv"
             video_path.write_bytes(b"data")
 
-            with patch("xxrdfind.subprocess.Popen") as popen_mock:
-                with self.assertLogs("xxrdfind", level="INFO") as logs:
-                    result = xxrdfind.file_hash(video_path, strip_metadata=True)
+            with patch("xxdedupi.subprocess.Popen") as popen_mock:
+                with self.assertLogs("xxdedupi", level="INFO") as logs:
+                    result = xxdedupi.file_hash(video_path, strip_metadata=True)
 
             self.assertEqual((video_path, None, 'unsupported_exiftool_extension'), result)
             popen_mock.assert_not_called()
@@ -69,10 +69,10 @@ class CacheFailureTest(TestCase):
             def fake_file_hash(path, strip_metadata=False, algorithm='xxh64'):
                 return path, None, 'exiftool failed'
 
-            cache_path = root / ".xxrdfind_cache_stripped.json"
+            cache_path = root / ".xxdedupi_cache_stripped.json"
 
-            with patch("xxrdfind.file_hash", side_effect=fake_file_hash):
-                xxrdfind.find_duplicates(
+            with patch("xxdedupi.file_hash", side_effect=fake_file_hash):
+                xxdedupi.find_duplicates(
                     [root],
                     strip_metadata=True,
                     show_progress=False,
@@ -84,8 +84,8 @@ class CacheFailureTest(TestCase):
             self.assertIn('xxh64_failed', cache_data[rel])
             self.assertEqual('exiftool failed', cache_data[rel]['xxh64_failed'])
 
-            with patch("xxrdfind.file_hash", side_effect=fake_file_hash) as file_hash_mock:
-                xxrdfind.find_duplicates(
+            with patch("xxdedupi.file_hash", side_effect=fake_file_hash) as file_hash_mock:
+                xxdedupi.find_duplicates(
                     [root],
                     strip_metadata=True,
                     show_progress=False,
@@ -114,8 +114,8 @@ class StripMetadataHashingTest(TestCase):
                     return path, f"digest-{path.name}", None
                 return path, f"strong-{path.name}", None
 
-            with patch("xxrdfind.file_hash", side_effect=fake_file_hash):
-                xxrdfind.find_duplicates(
+            with patch("xxdedupi.file_hash", side_effect=fake_file_hash):
+                xxdedupi.find_duplicates(
                     [root],
                     strip_metadata=True,
                     show_progress=False,
@@ -134,8 +134,8 @@ class CacheManagementTest(TestCase):
             file_a.write_bytes(data)
             file_b.write_bytes(data)
 
-            cache_path = root / ".xxrdfind_cache.json"
-            xxrdfind.find_duplicates(
+            cache_path = root / ".xxdedupi_cache.json"
+            xxdedupi.find_duplicates(
                 [root],
                 show_progress=False,
                 delete=False,
@@ -146,13 +146,13 @@ class CacheManagementTest(TestCase):
     def test_remove_cache_option_deletes_existing_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cache_regular = root / ".xxrdfind_cache.json"
-            cache_stripped = root / ".xxrdfind_cache_stripped.json"
+            cache_regular = root / ".xxdedupi_cache.json"
+            cache_stripped = root / ".xxdedupi_cache_stripped.json"
             cache_regular.write_text("{}")
             cache_stripped.write_text("{}")
             (root / "file.bin").write_bytes(b"data")
 
-            xxrdfind.find_duplicates(
+            xxdedupi.find_duplicates(
                 [root],
                 show_progress=False,
                 use_cache=False,
