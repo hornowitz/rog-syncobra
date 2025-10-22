@@ -882,6 +882,7 @@ def exif_sort(src, dest, args):
     whatsapp_video_present = has_matching_media(present_exts, WHATSAPP_VIDEO_EXTS)
     android_video_present = has_matching_media(present_exts, ANDROID_VIDEO_EXTS)
     dcim_present = has_matching_media(present_exts, DCIM_EXTS)
+    whatsapp_present = whatsapp_image_present or whatsapp_video_present
 
     should_run = any(
         (
@@ -889,7 +890,7 @@ def exif_sort(src, dest, args):
             screenshot_present,
             android_video_present,
             dcim_present,
-            args.whatsapp and (whatsapp_image_present or whatsapp_video_present),
+            whatsapp_present,
         )
     )
 
@@ -1341,7 +1342,6 @@ def exif_sort(src, dest, args):
             message=stage_message(),
         )
 
-    whatsapp_present = whatsapp_image_present or whatsapp_video_present
     if args.whatsapp:
         if not whatsapp_present:
             logger.info(
