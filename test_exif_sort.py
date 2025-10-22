@@ -302,10 +302,8 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     assert result is True
 
     payloads = _extract_stay_open_payloads(instances)
-    timestamp_tag = '${CreateDate;DateTimeOriginal;ModifyDate}'
-    timestamp_condition = (
-        'defined $CreateDate or defined $DateTimeOriginal or defined $ModifyDate'
-    )
+    timestamp_tag = MODULE.PRIMARY_TIMESTAMP_TAG
+    timestamp_condition = MODULE.PRIMARY_TIMESTAMP_CONDITION
     dcim_payloads = [
         payload
         for payload in payloads
