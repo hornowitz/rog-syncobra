@@ -54,9 +54,11 @@ MEDIA_SCAN_EXTS = (
 WHATSAPP_IMAGE_IF_CLAUSE = (
     "("
     r"$filename=~/^IMG-\d{8}-WA\d{4}\.\w*/ "
-    r"or $jfifversion=~/1\.01/i and ( "
-    r"$EncodingProcess=~/progressive/i "
-    r"or $EncodingProcess=~/baseline/i ) "
+    r"or ( $jfifversion=~/1\.01/i "
+    r"and $ImageWidth<=1600 "
+    r"and $ImageHeight<=1600 "
+    r"and ( $EncodingProcess=~/progressive/i "
+    r"or $EncodingProcess=~/baseline/i ) ) "
     r"or ( $filename=~/^IMG_\d{4,}\.\w*/ "
     r"and $jfifversion=~/1\.01/i "
     r"and $ImageWidth<=1600 "
@@ -76,7 +78,8 @@ WHATSAPP_ANY_IF_CLAUSE = (
 )
 
 
-PRIMARY_TIMESTAMP_TAG = '${CreateDate;DateTimeOriginal;ModifyDate;FileModifyDate}'
+PRIMARY_TIMESTAMP_TAG = '${CreateDate;DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
+CREATE_DATE_FALLBACK_TAG = '${DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
 QUICKTIME_CREATION_CONDITION = (
     'defined $CreationDate or defined $QuickTime:CreationDate '
     'or defined $QuickTime:CreateDate'
@@ -85,7 +88,8 @@ QUICKTIME_CREATION_TAG = (
     '${CreationDate;QuickTime:CreationDate;QuickTime:CreateDate}'
 )
 PRIMARY_TIMESTAMP_CONDITION = (
-    'defined $CreateDate or defined $DateTimeOriginal or defined $ModifyDate '
+    'defined $CreateDate or defined $DateTimeOriginal or defined $DateAcquired '
+    'or defined $ModifyDate '
     f'or (defined $FileModifyDate and not ({QUICKTIME_CREATION_CONDITION}))'
 )
 
@@ -1265,7 +1269,7 @@ def exif_sort(src, dest, args):
                 _exiftool_cmd(
                     '-if', whatsapp_condition,
                     '-if','not defined $CreateDate',
-                    '-CreateDate<FileModifyDate',
+                    f'-CreateDate<{CREATE_DATE_FALLBACK_TAG}',
                     '-overwrite_original_in_place','-P','-fast2',
                     '-ext+','JPG','-ext+','MP4','-ext+','3GP'
                 ),
@@ -1279,7 +1283,7 @@ def exif_sort(src, dest, args):
                 cmd = _exiftool_cmd(
                     '-if', cond,
                     '-if','not defined $CreateDate',
-                    '-CreateDate<FileModifyDate',
+                    f'-CreateDate<{CREATE_DATE_FALLBACK_TAG}',
                     '-overwrite_original_in_place','-P','-fast2',
                     *exts,
                 )

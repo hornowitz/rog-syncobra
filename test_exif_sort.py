@@ -226,6 +226,10 @@ def test_exif_sort_whatsapp_handles_baseline_jpg(monkeypatch, tmp_path):
     assert "^IMG_\\d{4,}\\.\\w*" in MODULE.WHATSAPP_IMAGE_IF_CLAUSE
     assert "$ImageWidth<=1600" in MODULE.WHATSAPP_IMAGE_IF_CLAUSE
     assert "$ImageHeight<=1600" in MODULE.WHATSAPP_IMAGE_IF_CLAUSE
+    assert (
+        "$jfifversion=~/1\\.01/i and $ImageWidth<=1600 and $ImageHeight<=1600"
+        in MODULE.WHATSAPP_IMAGE_IF_CLAUSE
+    )
 
 
 def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
