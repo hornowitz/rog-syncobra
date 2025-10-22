@@ -94,12 +94,20 @@ def _timestamp_expression(tags: Sequence[str]) -> str:
 PRIMARY_TIMESTAMP_TAG = _timestamp_expression(PRIMARY_TIMESTAMP_SOURCES)
 
 
-def build_timestamp_copy_expression(*, exclude: Iterable[str] = ()) -> str:
-    """Return a ${...} expression that omits any excluded timestamp tags."""
+def build_timestamp_copy_expression(
+    *, exclude: Iterable[str] = (), prefer: Iterable[str] = ()
+) -> str:
+    """Return a ${...} expression that omits excluded tags and prioritises others."""
 
     excluded = set(exclude)
-    filtered = [tag for tag in PRIMARY_TIMESTAMP_SOURCES if tag not in excluded]
-    return _timestamp_expression(filtered)
+    preferred = [tag for tag in prefer if tag not in excluded]
+    filtered = [
+        tag
+        for tag in PRIMARY_TIMESTAMP_SOURCES
+        if tag not in excluded and tag not in preferred
+    ]
+    ordered = preferred + filtered
+    return _timestamp_expression(ordered)
 
 
 # When copying timestamps into metadata fields we must avoid referencing the
@@ -1228,6 +1236,7 @@ def exif_sort(src, dest, args):
                     ('-Keywords+=WhatsApp', whatsapp_keywords_condition),
                     ('-XMP-dc:Subject+=WhatsApp', whatsapp_subject_condition),
                 ],
+                True,
             ),
             # WhatsApp Videos (MP4 + MOV)
             (
@@ -1239,6 +1248,7 @@ def exif_sort(src, dest, args):
                     ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
                     ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
                 ],
+                True,
             ),
             # WhatsApp Videos (3GP)
             (
@@ -1250,10 +1260,11 @@ def exif_sort(src, dest, args):
                     ('-Keys:Keywords=WhatsApp', whatsapp_keys_keywords_condition),
                     ('-XMP-dc:Subject=WhatsApp', whatsapp_subject_condition),
                 ],
+                True,
             ),
 
         ]
-        for cond, exts, required, tag_updates in blocks:
+        for cond, exts, required, tag_updates, prefer_file_modify in blocks:
             if required and not has_matching_media(present_exts, required):
                 logger.debug(
                     "Skipping WhatsApp rule %s (no %s media)",
@@ -1261,19 +1272,31 @@ def exif_sort(src, dest, args):
                     describe_extensions(required),
                 )
                 continue
+            prefer_sources = ('FileModifyDate',) if prefer_file_modify else ()
             copy_args = [
-                ('CreateDate', build_timestamp_copy_expression(exclude=('CreateDate',))),
+                (
+                    'CreateDate',
+                    build_timestamp_copy_expression(
+                        exclude=('CreateDate',), prefer=prefer_sources
+                    ),
+                ),
                 (
                     'ModifyDate',
-                    build_timestamp_copy_expression(exclude=('ModifyDate',)),
+                    build_timestamp_copy_expression(
+                        exclude=('ModifyDate',), prefer=prefer_sources
+                    ),
                 ),
                 (
                     'DateTimeOriginal',
-                    build_timestamp_copy_expression(exclude=('DateTimeOriginal',)),
+                    build_timestamp_copy_expression(
+                        exclude=('DateTimeOriginal',), prefer=prefer_sources
+                    ),
                 ),
                 (
                     'FileModifyDate',
-                    build_timestamp_copy_expression(exclude=('FileModifyDate',)),
+                    build_timestamp_copy_expression(
+                        exclude=('FileModifyDate',), prefer=prefer_sources
+                    ),
                 ),
             ]
             base_cmd = _exiftool_cmd('-if', cond)
