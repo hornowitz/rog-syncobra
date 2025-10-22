@@ -71,9 +71,16 @@ WHATSAPP_ANY_IF_CLAUSE = (
 
 
 PRIMARY_TIMESTAMP_TAG = '${CreateDate;DateTimeOriginal;ModifyDate;FileModifyDate}'
+QUICKTIME_CREATION_CONDITION = (
+    'defined $CreationDate or defined $QuickTime:CreationDate '
+    'or defined $QuickTime:CreateDate'
+)
+QUICKTIME_CREATION_TAG = (
+    '${CreationDate;QuickTime:CreationDate;QuickTime:CreateDate}'
+)
 PRIMARY_TIMESTAMP_CONDITION = (
     'defined $CreateDate or defined $DateTimeOriginal or defined $ModifyDate '
-    'or defined $FileModifyDate'
+    f'or (defined $FileModifyDate and not ({QUICKTIME_CREATION_CONDITION}))'
 )
 
 
@@ -1345,18 +1352,11 @@ def exif_sort(src, dest, args):
         )
 
 
-        creation_date_condition = (
-            'defined $CreationDate or defined $QuickTime:CreationDate '
-            'or defined $QuickTime:CreateDate'
-        )
-        creation_date_tag = (
-            '${CreationDate;QuickTime:CreationDate;QuickTime:CreateDate}'
-        )
         creation_date_cmd = [
             *dcim_common,
-            '-if', f'defined $Model and ({creation_date_condition})',
-            f'-Filename<{creation_date_tag} ${{Model}}%-c.%e',
-            f'-Filename<{creation_date_tag}_$SubSecTimeOriginal ${{Model}}%-c.%e',
+            '-if', f'defined $Model and ({QUICKTIME_CREATION_CONDITION})',
+            f'-Filename<{QUICKTIME_CREATION_TAG} ${{Model}}%-c.%e',
+            f'-Filename<{QUICKTIME_CREATION_TAG}_$SubSecTimeOriginal ${{Model}}%-c.%e',
 
         ]
         queue(creation_date_cmd)
