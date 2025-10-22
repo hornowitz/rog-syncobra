@@ -255,6 +255,102 @@ def test_exif_sort_whatsapp_handles_baseline_jpg(monkeypatch, tmp_path):
             assert '${FileModifyDate' in update
 
 
+def test_exif_sort_whatsapp_renames_prefer_file_modify(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def communicate(self, *args, **kwargs):
+            return ("", "")
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    def fake_scan_media_extensions(*_args, **_kwargs):
+        return {".jpg", ".mp4"}
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
+
+    (tmp_path / "IMG-20240101-WA0001.jpg").write_bytes(b"")
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=True,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    timestamp_tag = MODULE.WHATSAPP_TIMESTAMP_TAG
+
+    file_cmds = [
+        part
+        for payload in payloads
+        for part in payload
+        if part.startswith('-FileName<') and 'WhatsApp%-c.%e' in part
+    ]
+    dir_cmds = [
+        part
+        for payload in payloads
+        for part in payload
+        if part.startswith('-Directory<') and '/WhatsApp' in part
+    ]
+
+    assert file_cmds, "Expected WhatsApp file rename commands"
+    assert dir_cmds, "Expected WhatsApp directory commands"
+
+    for cmd in file_cmds:
+        assert cmd.startswith(f'-FileName<{timestamp_tag} ')
+    for cmd in dir_cmds:
+        assert cmd.startswith(f'-Directory<{timestamp_tag}/')
+
+
 def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     instances = []
 
