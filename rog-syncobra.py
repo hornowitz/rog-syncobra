@@ -15,7 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
-import xxdedupi
+try:
+    import xxdedupi
+except ModuleNotFoundError as exc:  # pragma: no cover - handled dynamically
+    xxdedupi = None  # type: ignore[assignment]
+    _XXDEDUPI_IMPORT_ERROR = exc
+else:
+    _XXDEDUPI_IMPORT_ERROR = None
 
 try:  # pragma: no cover - optional dependency import
     from watchdog.events import FileSystemEventHandler
@@ -328,6 +334,8 @@ def install_requirements():
     missing = [pkg for prog, pkg in packages.items() if not shutil.which(prog)]
     python_packages = {
         'watchdog': 'python3-watchdog',
+        'xxhash': 'python3-xxhash',
+        'tqdm': 'python3-tqdm',
     }
     for module, package in python_packages.items():
         if importlib.util.find_spec(module) is None:
@@ -342,6 +350,49 @@ def install_requirements():
     except Exception as e:
         logger.error(f"Failed to install dependencies: {e}")
         sys.exit(1)
+
+
+def _prompt_install_missing_dependency(exc: ModuleNotFoundError):
+    """Interactively offer to install a missing Python dependency."""
+
+    missing_name = exc.name or 'a required module'
+    script_name = Path(sys.argv[0]).name or 'rog-syncobra.py'
+    logger.error("Missing Python dependency '%s' (%s).", missing_name, exc)
+    if sys.stdin.isatty():
+        try:
+            response = input(
+                "Attempt to install missing dependencies now? [y/N]: "
+            ).strip().lower()
+        except EOFError:
+            response = ''
+        if response in {'y', 'yes'}:
+            install_requirements()
+            try:
+                return importlib.import_module('xxdedupi')
+            except ModuleNotFoundError as new_exc:  # pragma: no cover - install failure
+                logger.error("Automatic dependency installation failed: %s", new_exc)
+                sys.exit(1)
+    logger.info(
+        "Run '%s --install-deps' to install dependencies automatically "
+        "or install '%s' manually (e.g. with pip).",
+        script_name,
+        missing_name,
+    )
+    sys.exit(1)
+
+
+def _ensure_xxdedupi():
+    """Return the xxdedupi module, prompting for installation if missing."""
+
+    global xxdedupi, _XXDEDUPI_IMPORT_ERROR
+    if xxdedupi is not None:
+        return xxdedupi
+    if _XXDEDUPI_IMPORT_ERROR is not None:
+        xxdedupi = _prompt_install_missing_dependency(_XXDEDUPI_IMPORT_ERROR)
+        _XXDEDUPI_IMPORT_ERROR = None
+        return xxdedupi
+    xxdedupi = importlib.import_module('xxdedupi')
+    return xxdedupi
 
 def set_logging_verbosity(enable_debug: bool) -> None:
     level = logging.DEBUG if enable_debug else logging.INFO
@@ -661,12 +712,13 @@ def xxdedupi_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
         details.append(f"delete_within={', '.join(delete_within_strings)}")
     detail_str = f" ({'; '.join(details)})" if details else ''
     logger.info("xxdedupi dedupe: %s%s", " ".join(path_strings), detail_str)
+    module = _ensure_xxdedupi()
     if dry_run:
         logger.info("Dry run: skipping xxdedupi execution")
-        return xxdedupi.DuplicateSummary()
+        return module.DuplicateSummary()
 
     delete_roots = [Path(root) for root in delete_within_strings] if delete_within_strings else None
-    summary = xxdedupi.find_duplicates(
+    summary = module.find_duplicates(
         [Path(p) for p in path_strings],
         delete=True,
         dry_run=dry_run,
