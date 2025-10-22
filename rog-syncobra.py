@@ -13,7 +13,7 @@ import importlib.util
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
+from typing import Iterable, Optional, Sequence, Tuple, Union
 
 try:
     import xxdedupi
@@ -78,16 +78,36 @@ WHATSAPP_ANY_IF_CLAUSE = (
 )
 
 
-PRIMARY_TIMESTAMP_TAG = '${CreateDate;DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
-# When copying timestamps into metadata fields we must avoid referencing
-# ``CreateDate`` itself as a source because exiftool 13.x emits warnings such as
-# ``Tag 'CreateDate' not defined`` and skips the write if the tag is missing.
-# Using the fallback list keeps behaviour identical (we still prefer
-# DateTimeOriginal, DateAcquired, ModifyDate and finally FileModifyDate) while
-# preventing the spurious warning that stopped WhatsApp assets from being
-# processed.
-PRIMARY_TIMESTAMP_COPY_TAG = '${DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
-CREATE_DATE_FALLBACK_TAG = PRIMARY_TIMESTAMP_COPY_TAG
+PRIMARY_TIMESTAMP_SOURCES = (
+    'CreateDate',
+    'DateTimeOriginal',
+    'DateAcquired',
+    'ModifyDate',
+    'FileModifyDate',
+)
+
+
+def _timestamp_expression(tags: Sequence[str]) -> str:
+    return '${' + ';'.join(tags) + '}'
+
+
+PRIMARY_TIMESTAMP_TAG = _timestamp_expression(PRIMARY_TIMESTAMP_SOURCES)
+
+
+def build_timestamp_copy_expression(*, exclude: Iterable[str] = ()) -> str:
+    """Return a ${...} expression that omits any excluded timestamp tags."""
+
+    excluded = set(exclude)
+    filtered = [tag for tag in PRIMARY_TIMESTAMP_SOURCES if tag not in excluded]
+    return _timestamp_expression(filtered)
+
+
+# When copying timestamps into metadata fields we must avoid referencing the
+# destination tag itself as a source because exiftool may emit warnings such as
+# ``Tag 'CreateDate' not defined`` and skip the write if the tag is missing.
+# Building copy expressions dynamically lets each assignment omit its target
+# while preserving the historic priority order.
+CREATE_DATE_FALLBACK_TAG = build_timestamp_copy_expression(exclude=('CreateDate',))
 QUICKTIME_CREATION_CONDITION = (
     'defined $CreationDate or defined $QuickTime:CreationDate '
     'or defined $QuickTime:CreateDate'
@@ -1241,15 +1261,25 @@ def exif_sort(src, dest, args):
                     describe_extensions(required),
                 )
                 continue
-            base_cmd = _exiftool_cmd(
-                '-if', cond,
-                f'-CreateDate<{PRIMARY_TIMESTAMP_COPY_TAG}',
-                f'-AllDates<{PRIMARY_TIMESTAMP_COPY_TAG}',
-                f'-ModifyDate<{PRIMARY_TIMESTAMP_COPY_TAG}',
-                f'-DateTimeOriginal<{PRIMARY_TIMESTAMP_COPY_TAG}',
-                f'-FileModifyDate<{PRIMARY_TIMESTAMP_COPY_TAG}',
-                '-overwrite_original_in_place','-P','-fast2', *exts
-            )
+            copy_args = [
+                ('CreateDate', build_timestamp_copy_expression(exclude=('CreateDate',))),
+                (
+                    'ModifyDate',
+                    build_timestamp_copy_expression(exclude=('ModifyDate',)),
+                ),
+                (
+                    'DateTimeOriginal',
+                    build_timestamp_copy_expression(exclude=('DateTimeOriginal',)),
+                ),
+                (
+                    'FileModifyDate',
+                    build_timestamp_copy_expression(exclude=('FileModifyDate',)),
+                ),
+            ]
+            base_cmd = _exiftool_cmd('-if', cond)
+            for tag, expr in copy_args:
+                base_cmd.append(f'-{tag}<{expr}')
+            base_cmd.extend(['-overwrite_original_in_place', '-P', '-fast2', *exts])
             queue(base_cmd, message=stage_message())
 
             if apply_tagging:
