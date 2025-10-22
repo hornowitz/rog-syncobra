@@ -231,6 +231,29 @@ def test_exif_sort_whatsapp_handles_baseline_jpg(monkeypatch, tmp_path):
         in MODULE.WHATSAPP_IMAGE_IF_CLAUSE
     )
 
+    whatsapp_payloads = [
+        payload
+        for payload in payloads
+        if MODULE.WHATSAPP_IMAGE_IF_CLAUSE in payload
+    ]
+    assert whatsapp_payloads, "Expected WhatsApp-specific exiftool commands"
+
+    whatsapp_timestamp_updates: dict[str, list[str]] = {
+        'CreateDate': [],
+        'ModifyDate': [],
+        'DateTimeOriginal': [],
+    }
+    for payload in whatsapp_payloads:
+        for part in payload:
+            for tag in whatsapp_timestamp_updates:
+                prefix = f'-{tag}<'
+                if part.startswith(prefix):
+                    whatsapp_timestamp_updates[tag].append(part)
+    for tag, updates in whatsapp_timestamp_updates.items():
+        assert updates, f"Expected at least one update for {tag}"
+        for update in updates:
+            assert '${FileModifyDate' in update
+
 
 def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     instances = []
