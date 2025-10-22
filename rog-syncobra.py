@@ -79,7 +79,15 @@ WHATSAPP_ANY_IF_CLAUSE = (
 
 
 PRIMARY_TIMESTAMP_TAG = '${CreateDate;DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
-CREATE_DATE_FALLBACK_TAG = '${DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
+# When copying timestamps into metadata fields we must avoid referencing
+# ``CreateDate`` itself as a source because exiftool 13.x emits warnings such as
+# ``Tag 'CreateDate' not defined`` and skips the write if the tag is missing.
+# Using the fallback list keeps behaviour identical (we still prefer
+# DateTimeOriginal, DateAcquired, ModifyDate and finally FileModifyDate) while
+# preventing the spurious warning that stopped WhatsApp assets from being
+# processed.
+PRIMARY_TIMESTAMP_COPY_TAG = '${DateTimeOriginal;DateAcquired;ModifyDate;FileModifyDate}'
+CREATE_DATE_FALLBACK_TAG = PRIMARY_TIMESTAMP_COPY_TAG
 QUICKTIME_CREATION_CONDITION = (
     'defined $CreationDate or defined $QuickTime:CreationDate '
     'or defined $QuickTime:CreateDate'
@@ -1234,11 +1242,11 @@ def exif_sort(src, dest, args):
                 continue
             base_cmd = _exiftool_cmd(
                 '-if', cond,
-                f'-CreateDate<{PRIMARY_TIMESTAMP_TAG}',
-                f'-AllDates<{PRIMARY_TIMESTAMP_TAG}',
-                f'-ModifyDate<{PRIMARY_TIMESTAMP_TAG}',
-                f'-DateTimeOriginal<{PRIMARY_TIMESTAMP_TAG}',
-                f'-FileModifyDate<{PRIMARY_TIMESTAMP_TAG}',
+                f'-CreateDate<{PRIMARY_TIMESTAMP_COPY_TAG}',
+                f'-AllDates<{PRIMARY_TIMESTAMP_COPY_TAG}',
+                f'-ModifyDate<{PRIMARY_TIMESTAMP_COPY_TAG}',
+                f'-DateTimeOriginal<{PRIMARY_TIMESTAMP_COPY_TAG}',
+                f'-FileModifyDate<{PRIMARY_TIMESTAMP_COPY_TAG}',
                 '-overwrite_original_in_place','-P','-fast2', *exts
             )
             queue(base_cmd, message=stage_message())
