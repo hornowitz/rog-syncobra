@@ -116,6 +116,7 @@ def build_timestamp_copy_expression(
 # Building copy expressions dynamically lets each assignment omit its target
 # while preserving the historic priority order.
 CREATE_DATE_FALLBACK_TAG = build_timestamp_copy_expression(exclude=('CreateDate',))
+WHATSAPP_TIMESTAMP_TAG = build_timestamp_copy_expression(prefer=('FileModifyDate',))
 QUICKTIME_CREATION_CONDITION = (
     'defined $CreationDate or defined $QuickTime:CreationDate '
     'or defined $QuickTime:CreateDate'
@@ -1357,7 +1358,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(video_condition),
-                f'-FileName<{PRIMARY_TIMESTAMP_TAG} WhatsApp%-c.%e',
+                f'-FileName<{WHATSAPP_TIMESTAMP_TAG} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ),
@@ -1366,7 +1367,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(video_condition),
-                f'-Directory<{PRIMARY_TIMESTAMP_TAG}/WhatsApp',
+                f'-Directory<{WHATSAPP_TIMESTAMP_TAG}/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ),
@@ -1379,7 +1380,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(image_condition),
-                f'-FileName<{PRIMARY_TIMESTAMP_TAG} WhatsApp%-c.%e',
+                f'-FileName<{WHATSAPP_TIMESTAMP_TAG} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','JPG','-ext+','JPEG'
             ),
@@ -1388,7 +1389,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(image_condition),
-                f'-Directory<{PRIMARY_TIMESTAMP_TAG}/WhatsApp',
+                f'-Directory<{WHATSAPP_TIMESTAMP_TAG}/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','JPG','-ext+','JPEG'
             ),
