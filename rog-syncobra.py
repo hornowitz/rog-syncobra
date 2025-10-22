@@ -70,6 +70,13 @@ WHATSAPP_ANY_IF_CLAUSE = (
 )
 
 
+PRIMARY_TIMESTAMP_TAG = '${CreateDate;DateTimeOriginal;ModifyDate;FileModifyDate}'
+PRIMARY_TIMESTAMP_CONDITION = (
+    'defined $CreateDate or defined $DateTimeOriginal or defined $ModifyDate '
+    'or defined $FileModifyDate'
+)
+
+
 def _expand_path(path: str) -> str:
     """Return a normalized absolute path with user expansion."""
 
@@ -1164,11 +1171,11 @@ def exif_sort(src, dest, args):
                 continue
             base_cmd = _exiftool_cmd(
                 '-if', cond,
-                '-AllDates<FileModifyDate',
-                '-CreateDate<FileModifyDate',
-                '-ModifyDate<FileModifyDate',
-                '-DateTimeOriginal<FileModifyDate',
-                '-FileModifyDate<FileModifyDate',
+                f'-CreateDate<{PRIMARY_TIMESTAMP_TAG}',
+                f'-AllDates<{PRIMARY_TIMESTAMP_TAG}',
+                f'-ModifyDate<{PRIMARY_TIMESTAMP_TAG}',
+                f'-DateTimeOriginal<{PRIMARY_TIMESTAMP_TAG}',
+                f'-FileModifyDate<{PRIMARY_TIMESTAMP_TAG}',
                 '-overwrite_original_in_place','-P','-fast2', *exts
             )
             queue(base_cmd, message=stage_message())
@@ -1225,7 +1232,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(video_condition),
-                '-FileName<${FileModifyDate} WhatsApp%-c.%e',
+                f'-FileName<{PRIMARY_TIMESTAMP_TAG} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ),
@@ -1234,7 +1241,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(video_condition),
-                '-Directory<$FileModifyDate/WhatsApp',
+                f'-Directory<{PRIMARY_TIMESTAMP_TAG}/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','MP4','-ext+','MOV','-ext+','3GP'
             ),
@@ -1247,7 +1254,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(image_condition),
-                '-FileName<${FileModifyDate} WhatsApp%-c.%e',
+                f'-FileName<{PRIMARY_TIMESTAMP_TAG} WhatsApp%-c.%e',
                 '-d', "%Y-%m-%d %H-%M-%S",
                 '-ext+','JPG','-ext+','JPEG'
             ),
@@ -1256,7 +1263,7 @@ def exif_sort(src, dest, args):
         queue(
             _exiftool_cmd(
                 *_conditional_args(image_condition),
-                '-Directory<$FileModifyDate/WhatsApp',
+                f'-Directory<{PRIMARY_TIMESTAMP_TAG}/WhatsApp',
                 '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e',
                 '-ext+','JPG','-ext+','JPEG'
             ),
@@ -1289,7 +1296,7 @@ def exif_sort(src, dest, args):
         cmd = _exiftool_cmd(
             '-if', whatsapp_keyword_guard,
             '-if', 'not defined $Model',
-            "-FileName<${FileModifyDate}%-c.%e",
+            f"-FileName<{PRIMARY_TIMESTAMP_TAG}%-c.%e",
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
             '-ext', 'mp4',
             '-ext', '3gp',
@@ -1306,10 +1313,8 @@ def exif_sort(src, dest, args):
             '-ee'
         )
 
-        timestamp_condition = (
-            'defined $CreateDate or defined $DateTimeOriginal or defined $ModifyDate'
-        )
-        timestamp_tag = '${CreateDate;DateTimeOriginal;ModifyDate}'
+        timestamp_condition = PRIMARY_TIMESTAMP_CONDITION
+        timestamp_tag = PRIMARY_TIMESTAMP_TAG
 
         queue(
             [
@@ -1358,7 +1363,7 @@ def exif_sort(src, dest, args):
         cmd = _exiftool_cmd(
             '-if', f'{whatsapp_keyword_guard} and not defined $Model',
             '-if', f'not {WHATSAPP_ANY_IF_CLAUSE}',
-            '-Directory<$FileModifyDate/diverses',
+            f'-Directory<{PRIMARY_TIMESTAMP_TAG}/diverses',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         )
         queue(cmd)
