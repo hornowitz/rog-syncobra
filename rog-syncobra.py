@@ -1035,6 +1035,8 @@ def exif_sort(src, dest, args):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
             )
             assert proc.stdout is not None
@@ -1096,6 +1098,8 @@ def exif_sort(src, dest, args):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         assert proc.stdin and proc.stdout
