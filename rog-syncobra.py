@@ -590,14 +590,14 @@ def parse_args():
     p.add_argument('-r','--recursive', action='store_true', help="Recurse subdirectories")
     p.add_argument('-d','--raw-dedupe','--ddwometadata', dest='raw_dedupe', action='store_true',
                    help="Raw dedupe by data (XXH64) between source & dest")
-    p.add_argument('-D','--metadata-dedupe-source','--deldupi', dest='metadata_dedupe_source', action='store_true', default=True,
-                   help="Force metadata dedupe on source (use --no-metadata-dedupe-source to skip)")
+    p.add_argument('-D','--metadata-dedupe-source','--deldupi', dest='metadata_dedupe_source', action='store_true', default=False,
+                   help="Force metadata dedupe on source (disabled by default; use --no-metadata-dedupe-source to skip)")
     p.add_argument('--no-metadata-dedupe-source','--no-deldupi', dest='metadata_dedupe_source', action='store_false',
-                   help="Skip metadata dedupe on source before processing")
-    p.add_argument('-X','--metadata-dedupe-source-dest','--dedupsourceanddest', dest='metadata_dedupe_source_dest', action='store_true', default=None,
-                   help="Force metadata dedupe between source and destination pre-move (auto unless disabled)")
+                   help="Keep metadata dedupe disabled on the source (default)")
+    p.add_argument('-X','--metadata-dedupe-source-dest','--dedupsourceanddest', dest='metadata_dedupe_source_dest', action='store_true', default=False,
+                   help="Force metadata dedupe between source and destination pre-move (disabled by default)")
     p.add_argument('--no-metadata-dedupe-source-dest','--no-dedupsourceanddest', dest='metadata_dedupe_source_dest', action='store_false',
-                   help="Skip metadata dedupe between source and destination before processing")
+                   help="Keep metadata dedupe disabled between source and destination (default)")
     p.add_argument('-y','--year-month-sort', action='store_true',
                    help="Sort into Year/Month dirs (default on)")
     p.add_argument('-Y','--check-year-mount', action='store_true',
