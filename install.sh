@@ -107,7 +107,7 @@ DESTDIR=/srv/media/library
 # DRY_RUN=1                 # simulate actions without touching files
 # DEBUG=1                   # detailed exiftool logging
 # RAW_DEDUPE=1              # raw-content dedupe between source and destination
-# METADATA_DEDUPE_SOURCE=0  # skip metadata dedupe on the source tree
+# METADATA_DEDUPE_SOURCE=1  # enable metadata dedupe on the source tree
 # METADATA_DEDUPE_SOURCE_DEST=1  # compare metadata with the destination before moving
 # METADATA_DEDUPE_DESTINATION_FINAL=1 # run metadata dedupe after processing completes
 # (legacy DDWOMETADATA/DELDUPI/DEDUPSOURCEANDDEST/DEDUP_DESTINATION_FINAL are still accepted)

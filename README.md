@@ -38,10 +38,10 @@ To automatically install missing packages run:
 - `-d, --raw-dedupe` – raw dedupe by XXH64 between source and destination (legacy
   alias: `--ddwometadata`)
 - `-D, --metadata-dedupe-source` – force metadata dedupe on source (runs before
-  `--raw-dedupe`; legacy alias: `--deldupi`; enabled by default)
+  `--raw-dedupe`; legacy alias: `--deldupi`; disabled by default)
 - `-X, --metadata-dedupe-source-dest` – force metadata dedupe on source and compare
   against the destination before moving files (legacy alias: `--dedupsourceanddest`;
-  now the default when a destination is provided)
+  disabled by default)
 - `-y, --year-month-sort` – sort into `Year/Month` directories (default on)
 - `-Y, --check-year-mount` – verify that the current year's folder under the
   destination exists and is a mountpoint
@@ -150,11 +150,11 @@ CHECK_YEAR_MONTH=1
 GRACE=600
 ARCHIVE_DIR=/srv/archive
 MIN_AGE_DAYS=30
-METADATA_DEDUPE_SOURCE=0
+METADATA_DEDUPE_SOURCE=1
 ```
 
 This configuration runs rog-syncobra with `--verbose --dry-run
---check-year-mount --grace 600 --min-age-days 30 --archive-dir /srv/archive --no-metadata-dedupe-source`. Leave
+--check-year-mount --grace 600 --min-age-days 30 --archive-dir /srv/archive --metadata-dedupe-source`. Leave
 variables unset to keep their defaults. Setting `SKIP_MARKER=` (an empty value)
 disables skip markers entirely. Legacy deployments using
 `EXTRA_ARGS="..."` continue to work, but the per-variable approach is easier to
