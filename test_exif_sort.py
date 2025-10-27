@@ -47,6 +47,11 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def test_parse_google_formatted_timestamp_preserves_local_offset():
+    parsed = MODULE._parse_google_formatted_timestamp("2019-06-01 12:00:00 UTC+02:00")
+    assert parsed == datetime(2019, 6, 1, 12, 0, 0)
+
+
 def test_scan_media_extensions_detects_screenshot_name(tmp_path):
     (tmp_path / "Screenshot_20180221-143405.png").write_bytes(b"")
 
