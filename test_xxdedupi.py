@@ -128,8 +128,8 @@ class CacheManagementTest(TestCase):
     def test_does_not_create_cache_when_delete_not_selected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            file_a = root / "a.bin"
-            file_b = root / "b.bin"
+            file_a = root / "a.jpg"
+            file_b = root / "b.jpg"
             data = b"example"
             file_a.write_bytes(data)
             file_b.write_bytes(data)
@@ -150,7 +150,7 @@ class CacheManagementTest(TestCase):
             cache_stripped = root / ".xxdedupi_cache_stripped.json"
             cache_regular.write_text("{}")
             cache_stripped.write_text("{}")
-            (root / "file.bin").write_bytes(b"data")
+            (root / "file.jpg").write_bytes(b"data")
 
             xxdedupi.find_duplicates(
                 [root],
@@ -161,3 +161,67 @@ class CacheManagementTest(TestCase):
 
             self.assertFalse(cache_regular.exists())
             self.assertFalse(cache_stripped.exists())
+
+
+class RawDedupeFilteringTest(TestCase):
+    def test_skips_non_media_files_when_not_stripping_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_a = root / "photo_a.jpg"
+            media_b = root / "photo_b.jpg"
+            text_a = root / "doc_a.txt"
+            text_b = root / "doc_b.txt"
+            payload = b"duplicate"
+            for path in (media_a, media_b, text_a, text_b):
+                path.write_bytes(payload)
+
+            hashed_calls: list[tuple[Path, bool, str]] = []
+
+            def fake_file_hash(path, strip_metadata=False, algorithm='xxh64'):
+                hashed_calls.append((path, strip_metadata, algorithm))
+                return path, f"{algorithm}-{path.name}", None
+
+            with patch("xxdedupi.file_hash", side_effect=fake_file_hash):
+                xxdedupi.find_duplicates(
+                    [root],
+                    strip_metadata=False,
+                    show_progress=False,
+                )
+
+            raw_xxh64 = [
+                path
+                for path, strip_metadata, algorithm in hashed_calls
+                if not strip_metadata and algorithm == 'xxh64'
+            ]
+            self.assertCountEqual(raw_xxh64, [media_a, media_b])
+
+    def test_metadata_pass_still_hashes_non_media_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_a = root / "photo_a.jpg"
+            media_b = root / "photo_b.jpg"
+            text_a = root / "doc_a.txt"
+            text_b = root / "doc_b.txt"
+            payload = b"duplicate"
+            for path in (media_a, media_b, text_a, text_b):
+                path.write_bytes(payload)
+
+            hashed_calls: list[tuple[Path, bool, str]] = []
+
+            def fake_file_hash(path, strip_metadata=False, algorithm='xxh64'):
+                hashed_calls.append((path, strip_metadata, algorithm))
+                return path, f"{algorithm}-{path.name}", None
+
+            with patch("xxdedupi.file_hash", side_effect=fake_file_hash):
+                xxdedupi.find_duplicates(
+                    [root],
+                    strip_metadata='both',
+                    show_progress=False,
+                )
+
+            metadata_xxh64 = [
+                path
+                for path, strip_metadata, algorithm in hashed_calls
+                if strip_metadata and algorithm == 'xxh64'
+            ]
+            self.assertCountEqual(metadata_xxh64, [media_a, media_b, text_a, text_b])
