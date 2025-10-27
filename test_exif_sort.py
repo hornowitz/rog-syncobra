@@ -45,6 +45,28 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def test_scan_media_extensions_detects_screenshot_name(tmp_path):
+    (tmp_path / "Screenshot_20180221-143405.png").write_bytes(b"")
+
+    result = MODULE.scan_media_extensions(
+        str(tmp_path), recursive=False, extensions=MODULE.MEDIA_SCAN_EXTS
+    )
+
+    assert result.extensions == {".png"}
+    assert result.screenshot_present is True
+
+
+def test_scan_media_extensions_ignores_plain_png(tmp_path):
+    (tmp_path / "holiday.png").write_bytes(b"")
+
+    result = MODULE.scan_media_extensions(
+        str(tmp_path), recursive=False, extensions=MODULE.MEDIA_SCAN_EXTS
+    )
+
+    assert result.extensions == {".png"}
+    assert result.screenshot_present is False
+
+
 def test_exif_sort_configures_stay_open_ready(monkeypatch, tmp_path):
     instances = []
 
@@ -196,7 +218,7 @@ def test_exif_sort_whatsapp_handles_baseline_jpg(monkeypatch, tmp_path):
         return proc
 
     def fake_scan_media_extensions(*_args, **_kwargs):
-        return {".jpg"}
+        return MODULE.MediaScanResult(extensions={".jpg"})
 
     monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
@@ -307,7 +329,7 @@ def test_exif_sort_whatsapp_renames_prefer_file_modify(monkeypatch, tmp_path):
         return proc
 
     def fake_scan_media_extensions(*_args, **_kwargs):
-        return {".jpg", ".mp4"}
+        return MODULE.MediaScanResult(extensions={".jpg", ".mp4"})
 
     monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
@@ -355,7 +377,7 @@ def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     instances = []
 
     def fake_scan_media_extensions(*_args, **_kwargs):
-        return {".jpg"}
+        return MODULE.MediaScanResult(extensions={".jpg"})
 
     monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
     monkeypatch.setattr(MODULE, "SCREENSHOT_EXTS", {".png"})
