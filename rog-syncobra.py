@@ -42,6 +42,7 @@ SCREENSHOT_FILENAME_PATTERNS = [
     re.compile(r"^screenshot \d{4}-\d{2}-\d{2}(?: at \d{1,2}[\.-]\d{2}[\.-]\d{2}(?: [ap]m)?)?", re.IGNORECASE),
     re.compile(r"^screenshot\.[^.]+$", re.IGNORECASE),
     re.compile(r"^screen[ _-]?shot \d{4}-\d{2}-\d{2} at \d{1,2}\.\d{2}\.\d{2}(?: [ap]m)?", re.IGNORECASE),
+    re.compile(r"^bildschirmfoto \d{4}-\d{2}-\d{2} um \d{1,2}\.\d{2}\.\d{2}", re.IGNORECASE),
 ]
 WHATSAPP_IMAGE_EXTS = {'.jpg', '.jpeg'}
 WHATSAPP_VIDEO_EXTS = {'.mp4', '.mov', '.3gp'}
@@ -190,10 +191,75 @@ def build_exiftool_extension_filters(exts: Sequence[str]) -> list[str]:
 class MediaScanResult:
     extensions: set[str]
     screenshot_present: bool = False
+    screenshot_timestamps: dict[str, datetime] = field(default_factory=dict)
+
+
+_SCREENSHOT_TIMESTAMP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"screenshot[_-](\d{8})[-_](\d{6})", re.IGNORECASE),
+    re.compile(
+        r"screen[ _-]?shot[ _-]*(\d{4}-\d{2}-\d{2})[ _-]*at[ _-]*(\d{1,2})\.(\d{2})\.(\d{2})(?:[ _-]*([ap]m))?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"bildschirmfoto[ _-]*(\d{4}-\d{2}-\d{2})[ _-]*um[ _-]*(\d{1,2})\.(\d{2})\.(\d{2})",
+        re.IGNORECASE,
+    ),
+)
+
+
+def parse_screenshot_timestamp(name: str) -> Optional[datetime]:
+    base = os.path.basename(name)
+
+    # Compact pattern: Screenshot_YYYYMMDD-HHMMSS
+    match = _SCREENSHOT_TIMESTAMP_PATTERNS[0].search(base)
+    if match:
+        date_part, time_part = match.groups()
+        try:
+            return datetime.strptime(f"{date_part}{time_part}", "%Y%m%d%H%M%S")
+        except ValueError:
+            return None
+
+    # English macOS-style pattern: Screen Shot YYYY-MM-DD at HH.MM.SS[ AM|PM]
+    match = _SCREENSHOT_TIMESTAMP_PATTERNS[1].search(base)
+    if match:
+        date_part, hour_str, minute, second, ampm = match.groups()
+        try:
+            hour = int(hour_str)
+        except ValueError:
+            hour = -1
+        if hour < 0 or hour > 24:
+            return None
+        if ampm:
+            ampm = ampm.lower()
+            if ampm == 'pm' and hour != 12:
+                hour += 12
+            elif ampm == 'am' and hour == 12:
+                hour = 0
+        try:
+            return datetime.strptime(
+                f"{date_part} {hour:02d}:{minute}:{second}", "%Y-%m-%d %H:%M:%S"
+            )
+        except ValueError:
+            return None
+
+    # German macOS-style pattern: Bildschirmfoto YYYY-MM-DD um HH.MM.SS
+    match = _SCREENSHOT_TIMESTAMP_PATTERNS[2].search(base)
+    if match:
+        date_part, hour, minute, second = match.groups()
+        try:
+            return datetime.strptime(
+                f"{date_part} {int(hour):02d}:{minute}:{second}", "%Y-%m-%d %H:%M:%S"
+            )
+        except ValueError:
+            return None
+
+    return None
 
 
 def looks_like_screenshot_filename(name: str) -> bool:
     base = os.path.basename(name)
+    if parse_screenshot_timestamp(base):
+        return True
     if any(pattern.search(base) for pattern in SCREENSHOT_FILENAME_PATTERNS):
         return True
 
@@ -225,6 +291,8 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
     screenshot_exts = SCREENSHOT_EXTS_NORMALIZED
     found: set[str] = set()
     screenshot_present = False
+    screenshot_timestamps: dict[str, datetime] = {}
+    root_abs = _expand_path(root)
     stack = [root]
     while stack:
         current = stack.pop()
@@ -252,6 +320,13 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
                                 and looks_like_screenshot_filename(entry.name)
                             ):
                                 screenshot_present = True
+                            if screenshot_exts and ext_lower not in screenshot_exts:
+                                continue
+                            parsed_ts = parse_screenshot_timestamp(entry.name)
+                            if parsed_ts is not None:
+                                entry_abs = _expand_path(entry.path)
+                                rel_path = os.path.relpath(entry_abs, root_abs)
+                                screenshot_timestamps[rel_path] = parsed_ts
                         elif recursive and entry.is_dir(follow_symlinks=False):
                             entry_abs = _expand_path(entry.path)
                             if skip_paths and any(
@@ -266,7 +341,7 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
             logger.debug(f"Permission denied while scanning {current}: {exc}")
         except FileNotFoundError:
             logger.debug(f"Path disappeared while scanning: {current}")
-    return MediaScanResult(found, screenshot_present)
+    return MediaScanResult(found, screenshot_present, screenshot_timestamps)
 
 
 def has_matching_media(found_exts, candidates):
@@ -963,6 +1038,7 @@ def exif_sort(src, dest, args):
 
     heic_present = has_matching_media(present_exts, HEIC_EXTS)
     screenshot_present = scan_result.screenshot_present
+    screenshot_timestamps = scan_result.screenshot_timestamps
     whatsapp_image_present = has_matching_media(present_exts, WHATSAPP_IMAGE_EXTS)
     whatsapp_video_present = has_matching_media(present_exts, WHATSAPP_VIDEO_EXTS)
     android_video_present = has_matching_media(present_exts, ANDROID_VIDEO_EXTS)
@@ -1236,21 +1312,61 @@ def exif_sort(src, dest, args):
     screenshot_desc = describe_extensions(SCREENSHOT_EXTS)
     if screenshot_present:
         base_if = (
-            r"$filename=~/screenshot/i or "
-            r"$UserComment=~/screenshot/i"
+            r"$filename=~/(screenshot|screen[ _-]?shot|bildschirmfoto)/i or "
+            r"$UserComment=~/(screenshot|bildschirmfoto)/i"
         )
-        first_tagging = True
-        for src_tag, dst_tag in (("FileModifyDate","DateTimeOriginal"),
-                                 ("DateCreated",   "DateCreated")):
-            cmd = _exiftool_cmd(
-                '-if', base_if,
-                '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
-                '-Keywords+=Screenshot',
-                f"-alldates<{src_tag}", f"-FileModifyDate<{dst_tag}",
-                '-overwrite_original_in_place','-P','-fast2'
-            )
-            queue(cmd, message="Screenshots tagging" if first_tagging else None)
-            first_tagging = False
+        keyword_cmd = _exiftool_cmd(
+            '-if', base_if,
+            '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
+            '-Keywords+=Screenshot',
+            '-overwrite_original_in_place','-P','-fast2'
+        )
+        queue(keyword_cmd, message="Screenshots tagging")
+
+        if screenshot_timestamps:
+            timestamp_logged = False
+            for rel_path, parsed_ts in sorted(screenshot_timestamps.items()):
+                timestamp = parsed_ts.strftime("%Y:%m:%d %H:%M:%S")
+                cmd = _exiftool_cmd(
+                    '-if', 'not defined $DateTimeOriginal',
+                    f'-DateTimeOriginal={timestamp}',
+                    f'-CreateDate={timestamp}',
+                    f'-ModifyDate={timestamp}',
+                    f'-FileModifyDate={timestamp}',
+                    '-overwrite_original_in_place','-P','-fast2'
+                )
+                queue(
+                    cmd,
+                    extra_targets=[rel_path],
+                    message=(
+                        "Screenshots timestamp from filename"
+                        if not timestamp_logged else None
+                    ),
+                )
+                timestamp_logged = True
+
+        cmd = _exiftool_cmd(
+            '-if', base_if,
+            '-if', 'not defined $DateTimeOriginal',
+            '-if', 'defined $DateCreated',
+            '-DateTimeOriginal<$DateCreated',
+            '-CreateDate<$DateCreated',
+            '-ModifyDate<$DateCreated',
+            '-FileModifyDate<$DateTimeOriginal',
+            '-overwrite_original_in_place','-P','-fast2'
+        )
+        queue(cmd)
+
+        cmd = _exiftool_cmd(
+            '-if', base_if,
+            '-if', 'not defined $DateTimeOriginal',
+            '-DateTimeOriginal<$FileModifyDate',
+            '-CreateDate<$FileModifyDate',
+            '-ModifyDate<$FileModifyDate',
+            '-FileModifyDate<$DateTimeOriginal',
+            '-overwrite_original_in_place','-P','-fast2'
+        )
+        queue(cmd)
 
         cmd = _exiftool_cmd(
             '-if', '$Keywords=~/screenshot/i',
