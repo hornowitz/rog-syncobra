@@ -302,6 +302,102 @@ def test_exif_sort_sets_screenshot_timestamp_from_filename(monkeypatch, tmp_path
     assert '-DateTimeOriginal=2018:02:21 14:34:05' in timestamp_parts
 
 
+def test_exif_sort_screenshot_rename_handles_missing_keywords(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def communicate(self, *_args, **_kwargs):
+            return ("", "")
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+
+    (tmp_path / "Screenshot_20180221-143405.png").write_bytes(b"")
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=False,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    rename_tag = MODULE.PRIMARY_TIMESTAMP_TAG
+    rename_payloads = [
+        payload
+        for payload in payloads
+        if any(
+            part.startswith(f'-Filename<{rename_tag}') and 'Screenshot%-c.%e' in part
+            for part in payload
+        )
+    ]
+    assert rename_payloads, "Expected screenshot rename command"
+    for payload in rename_payloads:
+        assert any('defined $Keywords and $Keywords=~/screenshot/i' in part for part in payload)
+        assert any('screenshot|screen[ _-]?shot|bildschirmfoto' in part for part in payload)
+
+    directory_payloads = [
+        payload
+        for payload in payloads
+        if any(
+            part.startswith(f'-Directory<{rename_tag}/Screenshots')
+            for part in payload
+        )
+    ]
+    assert directory_payloads, "Expected screenshot directory command"
+    for payload in directory_payloads:
+        assert any('defined $Keywords and $Keywords=~/screenshot/i' in part for part in payload)
+        assert any('screenshot|screen[ _-]?shot|bildschirmfoto' in part for part in payload)
+
+
 def test_exif_sort_whatsapp_handles_baseline_jpg(monkeypatch, tmp_path):
     instances = []
 
