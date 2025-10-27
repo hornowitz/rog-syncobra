@@ -1321,7 +1321,7 @@ def exif_sort(src, dest, args):
             '-if', base_if,
             '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
             '-Keywords+=Screenshot',
-            '-overwrite_original_in_place','-P','-fast2'
+            '-overwrite_original_in_place','-P'
         )
         queue(keyword_cmd, message="Screenshots tagging")
 
@@ -1335,7 +1335,7 @@ def exif_sort(src, dest, args):
                     f'-CreateDate={timestamp}',
                     f'-ModifyDate={timestamp}',
                     f'-FileModifyDate={timestamp}',
-                    '-overwrite_original_in_place','-P','-fast2'
+                    '-overwrite_original_in_place','-P'
                 )
                 queue(
                     cmd,
@@ -1355,7 +1355,7 @@ def exif_sort(src, dest, args):
             '-CreateDate<$DateCreated',
             '-ModifyDate<$DateCreated',
             '-FileModifyDate<$DateTimeOriginal',
-            '-overwrite_original_in_place','-P','-fast2'
+            '-overwrite_original_in_place','-P'
         )
         queue(cmd)
 
@@ -1366,7 +1366,7 @@ def exif_sort(src, dest, args):
             '-CreateDate<$FileModifyDate',
             '-ModifyDate<$FileModifyDate',
             '-FileModifyDate<$DateTimeOriginal',
-            '-overwrite_original_in_place','-P','-fast2'
+            '-overwrite_original_in_place','-P'
         )
         queue(cmd)
 
@@ -1481,7 +1481,7 @@ def exif_sort(src, dest, args):
             base_cmd = _exiftool_cmd('-if', cond)
             for tag, expr in copy_args:
                 base_cmd.append(f'-{tag}<{expr}')
-            base_cmd.extend(['-overwrite_original_in_place', '-P', '-fast2', *exts])
+            base_cmd.extend(['-overwrite_original_in_place', '-P', *exts])
             queue(base_cmd, message=stage_message())
 
             if apply_tagging:
@@ -1490,7 +1490,7 @@ def exif_sort(src, dest, args):
                         '-if', cond,
                         '-if', f'not ({existing_condition})',
                         tag_update,
-                        '-overwrite_original_in_place','-P','-fast2', *exts
+                        '-overwrite_original_in_place','-P', *exts
                     )
                     queue(cmd, message=stage_message())
 
@@ -1511,7 +1511,7 @@ def exif_sort(src, dest, args):
                     '-if', whatsapp_condition,
                     '-if','not defined $CreateDate',
                     f'-CreateDate<{CREATE_DATE_FALLBACK_TAG}',
-                    '-overwrite_original_in_place','-P','-fast2',
+                    '-overwrite_original_in_place','-P',
                     '-ext+','JPG','-ext+','MP4','-ext+','3GP'
                 ),
                 message=stage_message(),
@@ -1525,7 +1525,7 @@ def exif_sort(src, dest, args):
                     '-if', cond,
                     '-if','not defined $CreateDate',
                     f'-CreateDate<{CREATE_DATE_FALLBACK_TAG}',
-                    '-overwrite_original_in_place','-P','-fast2',
+                    '-overwrite_original_in_place','-P',
                     *exts,
                 )
                 queue(cmd, message=stage_message())
