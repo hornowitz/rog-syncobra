@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 from collections import deque
@@ -300,6 +301,98 @@ def test_exif_sort_sets_screenshot_timestamp_from_filename(monkeypatch, tmp_path
         if part.startswith('-DateTimeOriginal=')
     }
     assert '-DateTimeOriginal=2018:02:21 14:34:05' in timestamp_parts
+
+
+def test_exif_sort_uses_google_takeout_sidecar(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def communicate(self, *_args, **_kwargs):
+            return ("", "")
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+
+    (tmp_path / "IMG_8887.JPG").write_bytes(b"")
+    metadata = {
+        "title": "IMG_8887.JPG",
+        "photoTakenTime": {
+            "timestamp": "1506859200",
+            "formatted": "2017-10-01 12:00:00 UTC",
+        },
+    }
+    (tmp_path / "IMG_8887.json").write_text(json.dumps(metadata))
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=False,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    timestamp_payloads = [
+        payload
+        for payload in payloads
+        if "IMG_8887.JPG" in payload
+        and any(part.startswith('-DateTimeOriginal=') for part in payload)
+    ]
+    assert timestamp_payloads, "Expected Google Takeout timestamp command"
+    timestamp_parts = {
+        part
+        for payload in timestamp_payloads
+        for part in payload
+        if part.startswith('-DateTimeOriginal=')
+    }
+    assert '-DateTimeOriginal=2017:10:01 12:00:00' in timestamp_parts
 
 
 def test_exif_sort_screenshot_rename_handles_missing_keywords(monkeypatch, tmp_path):
