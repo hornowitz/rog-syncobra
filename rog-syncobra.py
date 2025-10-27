@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import re
 import shutil
 import subprocess
 import logging
@@ -32,6 +33,16 @@ except ImportError:  # pragma: no cover - handled at runtime
 
 HEIC_EXTS = {'.heic', '.heif'}
 SCREENSHOT_EXTS = {'.png', '.jpg', '.jpeg', '.heic', '.heif', '.webp'}
+SCREENSHOT_FILENAME_PATTERNS = [
+    re.compile(r"^screenshot[_-]\d{8}[-_]\d{6}", re.IGNORECASE),
+    re.compile(r"^screenshot[_-]\d{4}-\d{2}-\d{2}[-_]\d{2}-\d{2}-\d{2}", re.IGNORECASE),
+    re.compile(r"^screenshot[-_ ]\d+", re.IGNORECASE),
+    re.compile(r"^screenshot from \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}", re.IGNORECASE),
+    re.compile(r"^screenshot \(\d+\)", re.IGNORECASE),
+    re.compile(r"^screenshot \d{4}-\d{2}-\d{2}(?: at \d{1,2}[\.-]\d{2}[\.-]\d{2}(?: [ap]m)?)?", re.IGNORECASE),
+    re.compile(r"^screenshot\.[^.]+$", re.IGNORECASE),
+    re.compile(r"^screen[ _-]?shot \d{4}-\d{2}-\d{2} at \d{1,2}\.\d{2}\.\d{2}(?: [ap]m)?", re.IGNORECASE),
+]
 WHATSAPP_IMAGE_EXTS = {'.jpg', '.jpeg'}
 WHATSAPP_VIDEO_EXTS = {'.mp4', '.mov', '.3gp'}
 ANDROID_VIDEO_EXTS = {'.mp4', '.mov', '.mts', '.mpg', '.vob', '.3gp', '.avi'}
@@ -172,10 +183,22 @@ def build_exiftool_extension_filters(exts: Sequence[str]) -> list[str]:
         filters.extend(['-ext', ext.lstrip('.').upper()])
     return filters
 
+@dataclass
+class MediaScanResult:
+    extensions: set[str]
+    screenshot_present: bool = False
+
+
+def looks_like_screenshot_filename(name: str) -> bool:
+    base = os.path.basename(name)
+    return any(pattern.search(base) for pattern in SCREENSHOT_FILENAME_PATTERNS)
+
 
 def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=None):
     targets = normalize_extensions(extensions)
-    found = set()
+    screenshot_exts = normalize_extensions(SCREENSHOT_EXTS)
+    found: set[str] = set()
+    screenshot_present = False
     stack = [root]
     while stack:
         current = stack.pop()
@@ -193,10 +216,16 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
                             _, ext = os.path.splitext(entry.name)
                             if not ext:
                                 continue
-                            ext = ext.lower()
-                            if targets and ext not in targets:
+                            ext_lower = ext.lower()
+                            if targets and ext_lower not in targets:
                                 continue
-                            found.add(ext)
+                            found.add(ext_lower)
+                            if (
+                                not screenshot_present
+                                and (not screenshot_exts or ext_lower in screenshot_exts)
+                                and looks_like_screenshot_filename(entry.name)
+                            ):
+                                screenshot_present = True
                         elif recursive and entry.is_dir(follow_symlinks=False):
                             entry_abs = _expand_path(entry.path)
                             if skip_paths and any(
@@ -211,7 +240,7 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
             logger.debug(f"Permission denied while scanning {current}: {exc}")
         except FileNotFoundError:
             logger.debug(f"Path disappeared while scanning: {current}")
-    return found
+    return MediaScanResult(found, screenshot_present)
 
 
 def has_matching_media(found_exts, candidates):
@@ -898,15 +927,16 @@ def exif_sort(src, dest, args):
     if skip_rel:
         targets = [t for t in targets if t not in skip_rel]
 
-    present_exts = scan_media_extensions(
+    scan_result = scan_media_extensions(
         src_abs, args.recursive, MEDIA_SCAN_EXTS, skip_paths=skip_abs
     )
+    present_exts = scan_result.extensions
     if logger.isEnabledFor(logging.DEBUG):
         detected = describe_extensions(present_exts) or 'none'
         logger.debug(f"Detected media extensions: {detected}")
 
     heic_present = has_matching_media(present_exts, HEIC_EXTS)
-    screenshot_present = has_matching_media(present_exts, SCREENSHOT_EXTS)
+    screenshot_present = scan_result.screenshot_present
     whatsapp_image_present = has_matching_media(present_exts, WHATSAPP_IMAGE_EXTS)
     whatsapp_video_present = has_matching_media(present_exts, WHATSAPP_VIDEO_EXTS)
     android_video_present = has_matching_media(present_exts, ANDROID_VIDEO_EXTS)
