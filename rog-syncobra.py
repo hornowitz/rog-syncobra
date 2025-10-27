@@ -1312,9 +1312,11 @@ def exif_sort(src, dest, args):
     screenshot_desc = describe_extensions(SCREENSHOT_EXTS)
     if screenshot_present:
         base_if = (
-            r"$filename=~/(screenshot|screen[ _-]?shot|bildschirmfoto)/i or "
-            r"$UserComment=~/(screenshot|bildschirmfoto)/i"
+            r"($filename=~/(screenshot|screen[ _-]?shot|bildschirmfoto)/i or "
+            r"$UserComment=~/(screenshot|bildschirmfoto)/i)"
         )
+        keyword_if = 'defined $Keywords and $Keywords=~/screenshot/i'
+        rename_if = f"({keyword_if} or {base_if})"
         keyword_cmd = _exiftool_cmd(
             '-if', base_if,
             '-if', 'not defined $Keywords or $Keywords!~/Screenshot/i',
@@ -1369,14 +1371,14 @@ def exif_sort(src, dest, args):
         queue(cmd)
 
         cmd = _exiftool_cmd(
-            '-if', '$Keywords=~/screenshot/i',
-            '-Filename<${CreateDate} ${Keywords}%-c.%e',
+            '-if', rename_if,
+            f'-Filename<{PRIMARY_TIMESTAMP_TAG} Screenshot%-c.%e',
             '-d', "%Y-%m-%d %H-%M-%S"
         )
         queue(cmd, message="Screenshots rename & move")
         cmd = _exiftool_cmd(
-            '-if', '$Keywords=~/screenshot/i',
-            '-Directory<$CreateDate/Screenshots',
+            '-if', rename_if,
+            f'-Directory<{PRIMARY_TIMESTAMP_TAG}/Screenshots',
             '-d', f"{dest}/{ym}", '-Filename=%f%-c.%e'
         )
         queue(cmd)
