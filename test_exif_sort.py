@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import types
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,35 @@ def test_scan_media_extensions_detects_prefixed_screenshot_name(tmp_path):
 
     assert result.extensions == {".png"}
     assert result.screenshot_present is True
+
+
+def test_scan_media_extensions_extracts_timestamp(tmp_path):
+    (tmp_path / "Screenshot_20180221-143405.png").write_bytes(b"")
+
+    result = MODULE.scan_media_extensions(
+        str(tmp_path), recursive=False, extensions=MODULE.MEDIA_SCAN_EXTS
+    )
+
+    expected = {"Screenshot_20180221-143405.png": datetime(2018, 2, 21, 14, 34, 5)}
+    assert result.screenshot_timestamps == expected
+
+
+def test_scan_media_extensions_extracts_localised_timestamp(tmp_path):
+    (tmp_path / "Bildschirmfoto 2021-04-05 um 07.08.09.png").write_bytes(b"")
+    (tmp_path / "Screen Shot 2022-05-06 at 09.10.11 PM.png").write_bytes(b"")
+
+    result = MODULE.scan_media_extensions(
+        str(tmp_path), recursive=False, extensions=MODULE.MEDIA_SCAN_EXTS
+    )
+
+    assert result.screenshot_present is True
+    timestamps = result.screenshot_timestamps
+    assert timestamps["Bildschirmfoto 2021-04-05 um 07.08.09.png"] == datetime(
+        2021, 4, 5, 7, 8, 9
+    )
+    assert timestamps["Screen Shot 2022-05-06 at 09.10.11 PM.png"] == datetime(
+        2022, 5, 6, 21, 10, 11
+    )
 
 
 def test_scan_media_extensions_detects_screenshot_without_digits(tmp_path):
@@ -186,6 +216,90 @@ def _extract_stay_open_payloads(instances):
             before_marker, *_ = write.split("\n-echo3\n", 1)
             payloads.append(before_marker.split("\n"))
     return payloads
+
+
+def test_exif_sort_sets_screenshot_timestamp_from_filename(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def communicate(self, *_args, **_kwargs):
+            return ("", "")
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+
+    (tmp_path / "Screenshot_20180221-143405.png").write_bytes(b"")
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=False,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    timestamp_payloads = [
+        payload
+        for payload in payloads
+        if "Screenshot_20180221-143405.png" in payload
+        and any(part.startswith('-DateTimeOriginal=') for part in payload)
+    ]
+    assert timestamp_payloads, "Expected timestamp override command for screenshot"
+    timestamp_parts = {
+        part
+        for payload in timestamp_payloads
+        for part in payload
+        if part.startswith('-DateTimeOriginal=')
+    }
+    assert '-DateTimeOriginal=2018:02:21 14:34:05' in timestamp_parts
 
 
 def test_exif_sort_whatsapp_handles_baseline_jpg(monkeypatch, tmp_path):
