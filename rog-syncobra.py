@@ -2,6 +2,7 @@
 import os
 import sys
 import re
+import json
 import shutil
 import subprocess
 import logging
@@ -12,7 +13,7 @@ import threading
 import queue
 import importlib.util
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple, Union
 
@@ -349,6 +350,207 @@ def has_matching_media(found_exts, candidates):
         return bool(found_exts)
     normalized = normalize_extensions(candidates)
     return bool(found_exts & normalized)
+
+
+_GOOGLE_TAKEOUT_TZ_PATTERN = re.compile(r"\s+UTC([+-]\d{2}):(\d{2})$")
+
+
+def _parse_google_formatted_timestamp(raw: str) -> Optional[datetime]:
+    value = raw.strip()
+    if not value:
+        return None
+
+    match = _GOOGLE_TAKEOUT_TZ_PATTERN.search(value)
+    if match:
+        try:
+            hours_raw = match.group(1)
+            minutes = int(match.group(2))
+            base = value[: match.start()].strip()
+            hours = abs(int(hours_raw))
+            dt = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
+            delta = timedelta(hours=hours, minutes=minutes)
+            if hours_raw.startswith('-'):
+                delta = -delta
+            return dt - delta
+        except (ValueError, OverflowError):
+            return None
+
+    for suffix in (' UTC', ' GMT', ' Z'):
+        if value.endswith(suffix):
+            value = value[: -len(suffix)].strip()
+            break
+
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _parse_google_timestamp_block(block: object) -> Optional[datetime]:
+    if not isinstance(block, dict):
+        return None
+
+    for key in ('timestamp', 'unixTimestamp', 'seconds'):
+        raw = block.get(key)
+        if raw is None:
+            continue
+        try:
+            raw_str = str(raw).strip()
+        except Exception:  # pragma: no cover - defensive
+            continue
+        if not raw_str:
+            continue
+        try:
+            seconds = float(raw_str)
+        except ValueError:
+            continue
+        try:
+            dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OSError, ValueError):
+            continue
+        return dt.replace(tzinfo=None)
+
+    formatted = block.get('formatted')
+    if isinstance(formatted, str):
+        return _parse_google_formatted_timestamp(formatted)
+
+    return None
+
+
+def _extract_google_takeout_timestamp(metadata: object) -> Optional[datetime]:
+    if not isinstance(metadata, dict):
+        return None
+
+    for key in (
+        'photoTakenTime',
+        'creationTime',
+        'captureTime',
+        'modificationTime',
+    ):
+        parsed = _parse_google_timestamp_block(metadata.get(key))
+        if parsed is not None:
+            return parsed
+
+    google_origin = metadata.get('googlePhotosOrigin')
+    if isinstance(google_origin, dict):
+        for key in ('photoTakenTime', 'creationTime'):
+            parsed = _parse_google_timestamp_block(google_origin.get(key))
+            if parsed is not None:
+                return parsed
+
+    media_metadata = metadata.get('mediaMetadata')
+    if isinstance(media_metadata, dict):
+        parsed = _parse_google_timestamp_block(media_metadata.get('creationTime'))
+        if parsed is not None:
+            return parsed
+        formatted = media_metadata.get('creationTime')
+        if isinstance(formatted, str):
+            parsed = _parse_google_formatted_timestamp(formatted)
+            if parsed is not None:
+                return parsed
+
+    return None
+
+
+def _extract_google_takeout_target(metadata: object, sidecar_name: str) -> Optional[str]:
+    if isinstance(metadata, dict):
+        for key in (
+            'title',
+            'name',
+            'filename',
+            'originalFilename',
+        ):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                return value
+        google_origin = metadata.get('googlePhotosOrigin')
+        if isinstance(google_origin, dict):
+            for key in ('fileName', 'filename', 'originalFilename'):
+                value = google_origin.get(key)
+                if isinstance(value, str) and value:
+                    return value
+
+    if sidecar_name.lower().endswith('.json'):
+        return sidecar_name[:-5]
+    return sidecar_name
+
+
+def collect_google_takeout_sidecars(
+    root: str, recursive: bool = False, skip_paths: Optional[set[str]] = None
+) -> dict[str, datetime]:
+    root_abs = _expand_path(root)
+    result: dict[str, datetime] = {}
+    stack = [root]
+
+    while stack:
+        current = stack.pop()
+        current_abs = _expand_path(current)
+        if skip_paths and any(
+            current_abs == skip or current_abs.startswith(f"{skip}{os.sep}")
+            for skip in skip_paths
+        ):
+            continue
+
+        try:
+            with os.scandir(current) as iterator:
+                entries = list(iterator)
+        except (PermissionError, FileNotFoundError):
+            continue
+
+        file_entries = [
+            entry for entry in entries if entry.is_file(follow_symlinks=False)
+        ]
+        file_lookup = {entry.name: entry for entry in file_entries}
+        lower_lookup = {entry.name.lower(): entry for entry in file_entries}
+
+        for entry in file_entries:
+            if not entry.name.lower().endswith('.json'):
+                continue
+            try:
+                with open(entry.path, 'r', encoding='utf-8') as handle:
+                    metadata = json.load(handle)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            timestamp = _extract_google_takeout_timestamp(metadata)
+            if timestamp is None:
+                continue
+
+            target_name = _extract_google_takeout_target(metadata, entry.name)
+            if not target_name:
+                continue
+
+            target_entry = file_lookup.get(target_name)
+            if target_entry is None:
+                target_entry = lower_lookup.get(target_name.lower())
+            if target_entry is None:
+                continue
+
+            _, ext = os.path.splitext(target_entry.name)
+            if not ext:
+                continue
+            if ext.lower() not in MEDIA_SCAN_EXTS:
+                continue
+
+            target_abs = _expand_path(target_entry.path)
+            rel_path = os.path.relpath(target_abs, root_abs)
+            if rel_path in result:
+                continue
+            result[rel_path] = timestamp
+
+        if recursive:
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                entry_abs = _expand_path(entry.path)
+                if skip_paths and any(
+                    entry_abs == skip or entry_abs.startswith(f"{skip}{os.sep}")
+                    for skip in skip_paths
+                ):
+                    continue
+                stack.append(entry.path)
+
+    return result
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -1146,6 +1348,32 @@ def exif_sort(src, dest, args):
             message,
         )
         jobs.append((job_cmd, job_targets, message))
+
+    google_sidecars = collect_google_takeout_sidecars(
+        src_abs, args.recursive, skip_abs or None
+    )
+    if google_sidecars:
+        logger.info(
+            "Applying Google Takeout timestamp metadata for %d file(s)",
+            len(google_sidecars),
+        )
+        takeout_logged = False
+        for rel_path, timestamp_dt in sorted(google_sidecars.items()):
+            timestamp = timestamp_dt.strftime("%Y:%m:%d %H:%M:%S")
+            message = None
+            if not takeout_logged:
+                message = "Google Takeout metadata import"
+                takeout_logged = True
+            cmd = _exiftool_cmd(
+                '-if', 'not defined $DateTimeOriginal or $DateTimeOriginal eq ""',
+                f'-DateTimeOriginal={timestamp}',
+                f'-CreateDate={timestamp}',
+                f'-ModifyDate={timestamp}',
+                f'-FileModifyDate={timestamp}',
+                '-overwrite_original_in_place',
+                '-P',
+            )
+            queue(cmd, extra_targets=[rel_path], message=message)
 
     class _StayOpenUnavailable(RuntimeError):
         """Raised when the stay_open ready marker is not supported."""
