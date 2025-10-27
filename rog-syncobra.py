@@ -191,7 +191,22 @@ class MediaScanResult:
 
 def looks_like_screenshot_filename(name: str) -> bool:
     base = os.path.basename(name)
-    return any(pattern.search(base) for pattern in SCREENSHOT_FILENAME_PATTERNS)
+    if any(pattern.search(base) for pattern in SCREENSHOT_FILENAME_PATTERNS):
+        return True
+
+    # Fall back to a heuristic when none of the known patterns match.  Some
+    # platforms or file synchronisation tools prepend extra text (for example
+    # "Vacation " or a leading space) before the original screenshot name.  In
+    # those cases we still want to treat the file as a screenshot as long as it
+    # contains the word "screenshot" and a recognisable numeric component.
+    base_lower = base.casefold()
+    if "screenshot" not in base_lower:
+        return False
+
+    # Require at least two consecutive digits so that "screenshot" file names
+    # without any timestamp-like data (for example "screenshot-notes.txt") do
+    # not trigger the screenshot flow.
+    return bool(re.search(r"\d{2,}", base_lower))
 
 
 def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=None):
