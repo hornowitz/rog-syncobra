@@ -47,6 +47,44 @@ UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS = {
     ".vob",
 }
 
+MEDIA_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".bmp",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".tif",
+    ".tiff",
+    ".dng",
+    ".nef",
+    ".arw",
+    ".orf",
+    ".raf",
+    ".rw2",
+    ".srw",
+    ".cr2",
+    ".cr3",
+    ".pef",
+    ".raw",
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".mts",
+    ".m2ts",
+    ".mpg",
+    ".mpeg",
+    ".vob",
+    ".3gp",
+    ".avi",
+    ".mkv",
+    ".wmv",
+    ".hevc",
+    ".webm",
+}
+
 logger = logging.getLogger("xxdedupi")
 
 CACHE_SUFFIXES = ('', '_stripped')
@@ -290,6 +328,11 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             if remove_cache_files and cache_root not in removed_roots:
                 remove_cache(cache_root)
                 removed_roots.add(cache_root)
+            if not strip_flag:
+                suffix = f.suffix.lower()
+                if suffix not in MEDIA_EXTENSIONS:
+                    logger.debug("Skipping non-media file %s in raw dedupe pass", f)
+                    continue
             root_cache = cache_root if use_cache else root
             root_map[f] = root_cache
             if use_cache and root_cache not in cache_map:
