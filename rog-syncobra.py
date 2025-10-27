@@ -13,7 +13,7 @@ import threading
 import queue
 import importlib.util
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple, Union
 
@@ -363,17 +363,17 @@ def _parse_google_formatted_timestamp(raw: str) -> Optional[datetime]:
     match = _GOOGLE_TAKEOUT_TZ_PATTERN.search(value)
     if match:
         try:
-            hours_raw = match.group(1)
-            minutes = int(match.group(2))
             base = value[: match.start()].strip()
-            hours = abs(int(hours_raw))
             dt = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
-            delta = timedelta(hours=hours, minutes=minutes)
-            if hours_raw.startswith('-'):
-                delta = -delta
-            return dt - delta
         except (ValueError, OverflowError):
             return None
+        else:
+            # Google Takeout formatted timestamps represent the local capture time
+            # with an appended timezone offset for reference (e.g.
+            # "2019-06-01 12:00:00 UTC+02:00").  EXIF timestamps are expected to
+            # remain as local times, so we drop the suffix but otherwise return the
+            # parsed naive datetime unchanged.
+            return dt
 
     for suffix in (' UTC', ' GMT', ' Z'):
         if value.endswith(suffix):
