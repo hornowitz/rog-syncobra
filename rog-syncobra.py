@@ -162,6 +162,9 @@ def normalize_extensions(exts):
     return normalized
 
 
+SCREENSHOT_EXTS_NORMALIZED = normalize_extensions(SCREENSHOT_EXTS)
+
+
 def describe_extensions(exts):
     if not exts:
         return ''
@@ -203,6 +206,14 @@ def looks_like_screenshot_filename(name: str) -> bool:
     if "screenshot" not in base_lower:
         return False
 
+    # When the file already has a typical screenshot extension we do not need
+    # to insist on a numeric timestamp.  This handles files that were renamed
+    # (for example, "Vacation Screenshot.png") but should still follow the
+    # screenshot flow.
+    _, ext = os.path.splitext(base_lower)
+    if ext in SCREENSHOT_EXTS_NORMALIZED:
+        return True
+
     # Require at least two consecutive digits so that "screenshot" file names
     # without any timestamp-like data (for example "screenshot-notes.txt") do
     # not trigger the screenshot flow.
@@ -211,7 +222,7 @@ def looks_like_screenshot_filename(name: str) -> bool:
 
 def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=None):
     targets = normalize_extensions(extensions)
-    screenshot_exts = normalize_extensions(SCREENSHOT_EXTS)
+    screenshot_exts = SCREENSHOT_EXTS_NORMALIZED
     found: set[str] = set()
     screenshot_present = False
     stack = [root]

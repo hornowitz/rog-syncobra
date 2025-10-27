@@ -67,6 +67,17 @@ def test_scan_media_extensions_detects_prefixed_screenshot_name(tmp_path):
     assert result.screenshot_present is True
 
 
+def test_scan_media_extensions_detects_screenshot_without_digits(tmp_path):
+    (tmp_path / "Vacation Screenshot.png").write_bytes(b"")
+
+    result = MODULE.scan_media_extensions(
+        str(tmp_path), recursive=False, extensions=MODULE.MEDIA_SCAN_EXTS
+    )
+
+    assert result.extensions == {".png"}
+    assert result.screenshot_present is True
+
+
 def test_scan_media_extensions_ignores_plain_png(tmp_path):
     (tmp_path / "holiday.png").write_bytes(b"")
 
