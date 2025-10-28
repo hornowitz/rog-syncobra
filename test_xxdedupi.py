@@ -164,7 +164,7 @@ class CacheManagementTest(TestCase):
 
 
 class RawDedupeFilteringTest(TestCase):
-    def test_skips_non_media_files_when_not_stripping_metadata(self):
+    def test_hashes_all_files_when_not_stripping_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             media_a = root / "photo_a.jpg"
@@ -193,9 +193,9 @@ class RawDedupeFilteringTest(TestCase):
                 for path, strip_metadata, algorithm in hashed_calls
                 if not strip_metadata and algorithm == 'xxh64'
             ]
-            self.assertCountEqual(raw_xxh64, [media_a, media_b])
+            self.assertCountEqual(raw_xxh64, [media_a, media_b, text_a, text_b])
 
-    def test_metadata_pass_still_hashes_non_media_files(self):
+    def test_strip_metadata_pass_skips_non_media_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             media_a = root / "photo_a.jpg"
@@ -219,9 +219,9 @@ class RawDedupeFilteringTest(TestCase):
                     show_progress=False,
                 )
 
-            metadata_xxh64 = [
+            stripped_xxh64 = [
                 path
                 for path, strip_metadata, algorithm in hashed_calls
                 if strip_metadata and algorithm == 'xxh64'
             ]
-            self.assertCountEqual(metadata_xxh64, [media_a, media_b, text_a, text_b])
+            self.assertCountEqual(stripped_xxh64, [media_a, media_b])

@@ -328,10 +328,13 @@ def find_duplicates(paths, delete=False, dry_run=False, threads=None, show_progr
             if remove_cache_files and cache_root not in removed_roots:
                 remove_cache(cache_root)
                 removed_roots.add(cache_root)
-            if not strip_flag:
-                suffix = f.suffix.lower()
-                if suffix not in MEDIA_EXTENSIONS:
-                    logger.debug("Skipping non-media file %s in raw dedupe pass", f)
+            suffix = f.suffix.lower()
+            if strip_flag:
+                if suffix not in MEDIA_EXTENSIONS or suffix in UNSUPPORTED_EXIFTOOL_VIDEO_EXTENSIONS:
+                    logger.debug(
+                        "Skipping %s in metadata-stripping dedupe pass (unsupported media type)",
+                        f,
+                    )
                     continue
             root_cache = cache_root if use_cache else root
             root_map[f] = root_cache
