@@ -1098,12 +1098,13 @@ def xxdedupi_dedupe(paths, dry_run=False, strip_metadata=False, delete_within=No
         return module.DuplicateSummary()
 
     delete_roots = [Path(root) for root in delete_within_strings] if delete_within_strings else None
+    progress_enabled = sys.stderr.isatty()
     summary = module.find_duplicates(
         [Path(p) for p in path_strings],
         delete=True,
         dry_run=dry_run,
         threads=threads,
-        show_progress=False,
+        show_progress=progress_enabled,
         strip_metadata=strip_metadata,
         delete_roots=delete_roots,
         scan_workers=scan_workers,
