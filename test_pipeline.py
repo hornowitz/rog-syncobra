@@ -26,3 +26,31 @@ def test_run_pipelines_sequential(monkeypatch):
     assert [src for src, _ in calls] == sources
     thread_names = {name for _, name in calls}
     assert thread_names == {threading.current_thread().name}
+
+
+def test_raw_dedupe_passes_delete_within(monkeypatch, tmp_path):
+    calls: dict[str, object] = {}
+
+    def fake_dedupe(paths, *, dry_run, strip_metadata, delete_within=None, **kwargs):
+        calls.update(
+            {
+                "paths": paths,
+                "dry_run": dry_run,
+                "strip_metadata": strip_metadata,
+                "delete_within": delete_within,
+                "extra_kwargs": kwargs,
+            }
+        )
+
+    monkeypatch.setattr(MODULE, "xxdedupi_dedupe", fake_dedupe)
+
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    src.mkdir()
+    dest.mkdir()
+
+    MODULE.raw_dedupe(str(src), str(dest), dry_run=False)
+
+    assert calls["delete_within"] == [str(src.resolve())]
+    assert calls["strip_metadata"] == "both"
+    assert calls["paths"] == [str(dest.resolve()), str(src.resolve())]
