@@ -1146,9 +1146,14 @@ def raw_dedupe(src, dest, dry_run=False, *_, **__):
     paths.append(src_abs)
     prefix = "[DRY] " if dry_run else ""
     logger.info(
-        f"{prefix}Raw dedupe via xxdedupi (including metadata pass): {' '.join(paths)}"
+        f"{prefix}Raw dedupe via xxdedupi (including metadata pass; deleting duplicates from source): {' '.join(paths)}"
     )
-    xxdedupi_dedupe(paths, dry_run=dry_run, strip_metadata='both')
+    xxdedupi_dedupe(
+        paths,
+        dry_run=dry_run,
+        strip_metadata='both',
+        delete_within=[src_abs],
+    )
 
 def exif_sort(src, dest, args):
     cwd = os.getcwd()
