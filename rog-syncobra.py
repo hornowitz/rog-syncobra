@@ -1663,10 +1663,92 @@ def exif_sort(src, dest, args):
             return "WhatsApp processing"
 
         if whatsapp_filename_timestamps:
+            def _extract_time_component(values: Sequence[Optional[str]]) -> Optional[tuple[int, int, int]]:
+                for value in values:
+                    if not value:
+                        continue
+                    time_candidate = value.split(' ', 1)[-1] if ' ' in value else value
+                    match = re.search(r"(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?", time_candidate)
+                    if match:
+                        hh, mm, ss = match.groups()
+                        return int(hh), int(mm), int(ss)
+                return None
+
+            def _load_existing_whatsapp_times() -> dict[str, tuple[int, int, int]]:
+                abs_map = {
+                    rel_path: _expand_path(os.path.join(src_abs, rel_path))
+                    for rel_path in whatsapp_filename_timestamps
+                }
+                if not abs_map:
+                    return {}
+                cmd = _exiftool_cmd(
+                    '-j',
+                    '-FileModifyDate',
+                    '-ModifyDate',
+                    '-CreateDate',
+                    '-DateTimeOriginal',
+                    '-FileCreateDate',
+                    '--',
+                    *abs_map.values(),
+                )
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except (OSError, subprocess.CalledProcessError) as exc:
+                    logger.debug("Failed to read existing WhatsApp timestamps: %s", exc)
+                    return {}
+
+                try:
+                    payload = json.loads(result.stdout or '[]')
+                except json.JSONDecodeError as exc:
+                    logger.debug("Invalid JSON from exiftool while reading WhatsApp timestamps: %s", exc)
+                    return {}
+
+                existing: dict[str, tuple[int, int, int]] = {}
+                rel_lookup: dict[str, str] = {}
+                for rel_path, abs_path in abs_map.items():
+                    rel_lookup[abs_path] = rel_path
+                    rel_lookup[os.path.relpath(abs_path, src_abs)] = rel_path
+                    rel_lookup[os.path.join('.', rel_path)] = rel_path
+                for entry in payload:
+                    source = entry.get('SourceFile')
+                    if not source:
+                        continue
+                    abs_source = _expand_path(source)
+                    rel_path = rel_lookup.get(abs_source)
+                    if rel_path is None:
+                        rel_path = rel_lookup.get(os.path.relpath(abs_source, src_abs))
+                    if not rel_path:
+                        continue
+                    time_parts = _extract_time_component(
+                        (
+                            entry.get('FileModifyDate'),
+                            entry.get('ModifyDate'),
+                            entry.get('CreateDate'),
+                            entry.get('DateTimeOriginal'),
+                            entry.get('FileCreateDate'),
+                        )
+                    )
+                    if time_parts:
+                        existing[rel_path] = time_parts
+                return existing
+
+            existing_times = _load_existing_whatsapp_times()
             timestamp_logged = False
             for rel_path, parsed_ts in sorted(
                 whatsapp_filename_timestamps.items()
             ):
+                time_parts = existing_times.get(rel_path)
+                if time_parts:
+                    parsed_ts = parsed_ts.replace(
+                        hour=time_parts[0],
+                        minute=time_parts[1],
+                        second=time_parts[2],
+                    )
                 timestamp = parsed_ts.strftime("%Y:%m:%d %H:%M:%S")
                 cmd = _exiftool_cmd(
                     f'-DateTimeOriginal={timestamp}',

@@ -377,6 +377,11 @@ def test_exif_sort_sets_whatsapp_timestamp_from_filename(monkeypatch, tmp_path):
     monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
 
+    def fake_run(*_args, **_kwargs):
+        return types.SimpleNamespace(stdout="[]", returncode=0)
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
     (tmp_path / "IMG-20161226-WA0001.jpg").write_bytes(b"")
 
     args = types.SimpleNamespace(
@@ -393,6 +398,114 @@ def test_exif_sort_sets_whatsapp_timestamp_from_filename(monkeypatch, tmp_path):
 
     payloads = _extract_stay_open_payloads(instances)
     expected_timestamp = "2016:12:26 00:00:00"
+    whatsapp_payloads = [
+        payload
+        for payload in payloads
+        if f'-DateTimeOriginal={expected_timestamp}' in payload
+    ]
+    assert whatsapp_payloads, "Expected WhatsApp filename timestamp update"
+    for payload in whatsapp_payloads:
+        assert f'-CreateDate={expected_timestamp}' in payload
+        assert f'-ModifyDate={expected_timestamp}' in payload
+        assert f'-FileModifyDate={expected_timestamp}' in payload
+        assert f'-FileCreateDate={expected_timestamp}' in payload
+
+
+def test_exif_sort_preserves_whatsapp_time_component(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def communicate(self, *_args, **_kwargs):
+            return ("", "")
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    def fake_scan_media_extensions(*_args, **_kwargs):
+        return MODULE.MediaScanResult(
+            extensions={".jpg"},
+            whatsapp_filename_timestamps={
+                "IMG-20161226-WA0001.jpg": datetime(2016, 12, 26, 0, 0, 0)
+            },
+        )
+
+    def fake_run(cmd, **kwargs):
+        assert '-j' in cmd
+        assert kwargs.get('capture_output')
+        assert kwargs.get('text')
+        if kwargs.get('check'):
+            payload = json.dumps(
+                [
+                    {
+                        "SourceFile": str(tmp_path / "IMG-20161226-WA0001.jpg"),
+                        "FileModifyDate": "2016:12:25 23:59:01",
+                    }
+                ]
+            )
+            return types.SimpleNamespace(stdout=payload, returncode=0)
+        return types.SimpleNamespace(stdout="[]", returncode=0)
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    (tmp_path / "IMG-20161226-WA0001.jpg").write_bytes(b"")
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=True,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    expected_timestamp = "2016:12:26 23:59:01"
     whatsapp_payloads = [
         payload
         for payload in payloads
