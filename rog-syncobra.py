@@ -90,6 +90,10 @@ WHATSAPP_ANY_IF_CLAUSE = (
     f"({WHATSAPP_IMAGE_IF_CLAUSE} or {WHATSAPP_VIDEO_IF_CLAUSE})"
 )
 
+WHATSAPP_FILENAME_TIMESTAMP_PATTERN = re.compile(
+    r"^(?:IMG|VID)-(\d{8})-WA\d+\b", re.IGNORECASE
+)
+
 
 PRIMARY_TIMESTAMP_SOURCES = (
     'CreateDate',
@@ -193,6 +197,7 @@ class MediaScanResult:
     extensions: set[str]
     screenshot_present: bool = False
     screenshot_timestamps: dict[str, datetime] = field(default_factory=dict)
+    whatsapp_filename_timestamps: dict[str, datetime] = field(default_factory=dict)
 
 
 _SCREENSHOT_TIMESTAMP_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -293,6 +298,7 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
     found: set[str] = set()
     screenshot_present = False
     screenshot_timestamps: dict[str, datetime] = {}
+    whatsapp_filename_timestamps: dict[str, datetime] = {}
     root_abs = _expand_path(root)
     stack = [root]
     while stack:
@@ -315,6 +321,21 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
                             if targets and ext_lower not in targets:
                                 continue
                             found.add(ext_lower)
+                            if (
+                                ext_lower in WHATSAPP_IMAGE_EXTS
+                                or ext_lower in WHATSAPP_VIDEO_EXTS
+                            ):
+                                match = WHATSAPP_FILENAME_TIMESTAMP_PATTERN.match(entry.name)
+                                if match:
+                                    date_part = match.group(1)
+                                    try:
+                                        parsed_date = datetime.strptime(date_part, "%Y%m%d")
+                                    except ValueError:
+                                        pass
+                                    else:
+                                        entry_abs = _expand_path(entry.path)
+                                        rel_path = os.path.relpath(entry_abs, root_abs)
+                                        whatsapp_filename_timestamps[rel_path] = parsed_date
                             if (
                                 not screenshot_present
                                 and (not screenshot_exts or ext_lower in screenshot_exts)
@@ -342,7 +363,12 @@ def scan_media_extensions(root, recursive=False, extensions=None, skip_paths=Non
             logger.debug(f"Permission denied while scanning {current}: {exc}")
         except FileNotFoundError:
             logger.debug(f"Path disappeared while scanning: {current}")
-    return MediaScanResult(found, screenshot_present, screenshot_timestamps)
+    return MediaScanResult(
+        found,
+        screenshot_present,
+        screenshot_timestamps,
+        whatsapp_filename_timestamps,
+    )
 
 
 def has_matching_media(found_exts, candidates):
@@ -1247,6 +1273,7 @@ def exif_sort(src, dest, args):
     heic_present = has_matching_media(present_exts, HEIC_EXTS)
     screenshot_present = scan_result.screenshot_present
     screenshot_timestamps = scan_result.screenshot_timestamps
+    whatsapp_filename_timestamps = scan_result.whatsapp_filename_timestamps
     whatsapp_image_present = has_matching_media(present_exts, WHATSAPP_IMAGE_EXTS)
     whatsapp_video_present = has_matching_media(present_exts, WHATSAPP_VIDEO_EXTS)
     android_video_present = has_matching_media(present_exts, ANDROID_VIDEO_EXTS)
@@ -1634,6 +1661,113 @@ def exif_sort(src, dest, args):
                 return None
             whatsapp_logged = True
             return "WhatsApp processing"
+
+        if whatsapp_filename_timestamps:
+            def _extract_time_component(values: Sequence[Optional[str]]) -> Optional[tuple[int, int, int]]:
+                for value in values:
+                    if not value:
+                        continue
+                    time_candidate = value.split(' ', 1)[-1] if ' ' in value else value
+                    match = re.search(r"(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?", time_candidate)
+                    if match:
+                        hh, mm, ss = match.groups()
+                        return int(hh), int(mm), int(ss)
+                return None
+
+            def _load_existing_whatsapp_times() -> dict[str, tuple[int, int, int]]:
+                abs_map = {
+                    rel_path: _expand_path(os.path.join(src_abs, rel_path))
+                    for rel_path in whatsapp_filename_timestamps
+                }
+                if not abs_map:
+                    return {}
+                cmd = _exiftool_cmd(
+                    '-j',
+                    '-FileModifyDate',
+                    '-ModifyDate',
+                    '-CreateDate',
+                    '-DateTimeOriginal',
+                    '-FileCreateDate',
+                    '--',
+                    *abs_map.values(),
+                )
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except (OSError, subprocess.CalledProcessError) as exc:
+                    logger.debug("Failed to read existing WhatsApp timestamps: %s", exc)
+                    return {}
+
+                try:
+                    payload = json.loads(result.stdout or '[]')
+                except json.JSONDecodeError as exc:
+                    logger.debug("Invalid JSON from exiftool while reading WhatsApp timestamps: %s", exc)
+                    return {}
+
+                existing: dict[str, tuple[int, int, int]] = {}
+                rel_lookup: dict[str, str] = {}
+                for rel_path, abs_path in abs_map.items():
+                    rel_lookup[abs_path] = rel_path
+                    rel_lookup[os.path.relpath(abs_path, src_abs)] = rel_path
+                    rel_lookup[os.path.join('.', rel_path)] = rel_path
+                for entry in payload:
+                    source = entry.get('SourceFile')
+                    if not source:
+                        continue
+                    abs_source = _expand_path(source)
+                    rel_path = rel_lookup.get(abs_source)
+                    if rel_path is None:
+                        rel_path = rel_lookup.get(os.path.relpath(abs_source, src_abs))
+                    if not rel_path:
+                        continue
+                    time_parts = _extract_time_component(
+                        (
+                            entry.get('FileModifyDate'),
+                            entry.get('ModifyDate'),
+                            entry.get('CreateDate'),
+                            entry.get('DateTimeOriginal'),
+                            entry.get('FileCreateDate'),
+                        )
+                    )
+                    if time_parts:
+                        existing[rel_path] = time_parts
+                return existing
+
+            existing_times = _load_existing_whatsapp_times()
+            timestamp_logged = False
+            for rel_path, parsed_ts in sorted(
+                whatsapp_filename_timestamps.items()
+            ):
+                time_parts = existing_times.get(rel_path)
+                if time_parts:
+                    parsed_ts = parsed_ts.replace(
+                        hour=time_parts[0],
+                        minute=time_parts[1],
+                        second=time_parts[2],
+                    )
+                timestamp = parsed_ts.strftime("%Y:%m:%d %H:%M:%S")
+                cmd = _exiftool_cmd(
+                    f'-DateTimeOriginal={timestamp}',
+                    f'-CreateDate={timestamp}',
+                    f'-ModifyDate={timestamp}',
+                    f'-FileModifyDate={timestamp}',
+                    f'-FileCreateDate={timestamp}',
+                    '-overwrite_original_in_place','-P'
+                )
+                queue(
+                    cmd,
+                    extra_targets=[rel_path],
+                    message=(
+                        "WhatsApp timestamp from filename"
+                        if not timestamp_logged
+                        else None
+                    ),
+                )
+                timestamp_logged = True
 
         whatsapp_keywords_condition = '$Keywords=~/whatsapp/i'
         whatsapp_subject_condition = '$XMP:Subject=~/whatsapp/i'
