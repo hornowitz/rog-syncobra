@@ -1973,6 +1973,20 @@ def exif_sort(src, dest, args):
             *android_video_filters,
         )
         queue(cmd, message="Misc vid processing")
+
+        timestamp_fallback_cmd = _exiftool_cmd(
+            '-if', whatsapp_keyword_guard,
+            '-if', 'not defined $Model',
+            '-if', f'not {WHATSAPP_ANY_IF_CLAUSE}',
+            '-if', f'not ({QUICKTIME_CREATION_CONDITION})',
+            '-if', 'not defined $CreateDate',
+            f'-CreateDate<{CREATE_DATE_FALLBACK_TAG}',
+            f'-DateTimeOriginal<{CREATE_DATE_FALLBACK_TAG}',
+            f'-ModifyDate<{CREATE_DATE_FALLBACK_TAG}',
+            '-overwrite_original_in_place','-P',
+            *android_video_filters,
+        )
+        queue(timestamp_fallback_cmd)
         dcim_common = _exiftool_cmd(
             '-if', whatsapp_keyword_guard,
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
