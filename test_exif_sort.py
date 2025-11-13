@@ -914,6 +914,90 @@ def test_exif_sort_whatsapp_renames_prefer_file_modify(monkeypatch, tmp_path):
         assert cmd.startswith(f'-Directory<{timestamp_tag}/')
 
 
+def test_exif_sort_renames_mpg_without_model(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def communicate(self, *_args, **_kwargs):
+            return ("", "")
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    def fake_scan_media_extensions(*_args, **_kwargs):
+        return MODULE.MediaScanResult(extensions={".mpg"})
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
+
+    (tmp_path / "Kreta 2010 006.MPG").write_bytes(b"")
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=False,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    misc_payloads = [
+        payload
+        for payload in payloads
+        if 'not defined $Model' in payload
+        and f'-FileName<{MODULE.PRIMARY_TIMESTAMP_TAG}%-c.%e' in payload
+        and '-ee' not in payload
+    ]
+    assert misc_payloads, "Expected misc video rename command for MPG files"
+    for payload in misc_payloads:
+        assert 'MPG' in payload, "MPG extension filter should be applied"
+
+
 def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     instances = []
 
