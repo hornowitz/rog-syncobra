@@ -1964,17 +1964,13 @@ def exif_sort(src, dest, args):
             ' or (defined $XMP:Subject and $XMP:Subject=~/whatsapp/i)'
             ')'
         )
+        android_video_filters = build_exiftool_extension_filters(ANDROID_VIDEO_EXTS)
         cmd = _exiftool_cmd(
             '-if', whatsapp_keyword_guard,
             '-if', 'not defined $Model',
             f"-FileName<{PRIMARY_TIMESTAMP_TAG}%-c.%e",
             '-d', f"{dest}/{ym}/%Y-%m-%d %H-%M-%S",
-            '-ext', 'mp4',
-            '-ext', '3gp',
-            '-ext', 'mov',
-            '-ext', 'mts',
-            '-ext', 'avi',
-            '-ext', 'vob',
+            *android_video_filters,
         )
         queue(cmd, message="Misc vid processing")
         dcim_common = _exiftool_cmd(
