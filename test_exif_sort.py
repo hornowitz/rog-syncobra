@@ -998,6 +998,93 @@ def test_exif_sort_renames_mpg_without_model(monkeypatch, tmp_path):
         assert 'MPG' in payload, "MPG extension filter should be applied"
 
 
+def test_exif_sort_sets_missing_create_date_for_misc_video(monkeypatch, tmp_path):
+    instances = []
+
+    class DummyStdout:
+        def __init__(self):
+            self.lines = deque()
+
+        def push_ready(self):
+            self.lines.append("{ready}\n")
+
+        def readline(self):
+            if not self.lines:
+                raise AssertionError("No output queued for exiftool mock")
+            return self.lines.popleft()
+
+    class DummyStdin:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.writes: list[str] = []
+
+        def write(self, data: str):
+            self.writes.append(data)
+            ready_count = data.count("-echo3\n")
+            for _ in range(ready_count):
+                self.stdout.push_ready()
+            return len(data)
+
+        def flush(self):
+            return None
+
+    class DummyProc:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.stdout = DummyStdout()
+            self.stdin = DummyStdin(self.stdout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def communicate(self, *_args, **_kwargs):
+            return ("", "")
+
+    def fake_popen(*args, **kwargs):
+        proc = DummyProc(*args, **kwargs)
+        instances.append(proc)
+        return proc
+
+    def fake_scan_media_extensions(*_args, **_kwargs):
+        return MODULE.MediaScanResult(extensions={".mpg"})
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(MODULE, "scan_media_extensions", fake_scan_media_extensions)
+
+    (tmp_path / "clip 001.MPG").write_bytes(b"")
+
+    args = types.SimpleNamespace(
+        debug=False,
+        year_month_sort=False,
+        skip_marker=None,
+        recursive=False,
+        whatsapp=False,
+        dry_run=False,
+    )
+
+    result = MODULE.exif_sort(str(tmp_path), str(tmp_path), args)
+    assert result is True
+
+    payloads = _extract_stay_open_payloads(instances)
+    fallback_tag = MODULE.CREATE_DATE_FALLBACK_TAG
+    fallback_payloads = [
+        payload
+        for payload in payloads
+        if 'not defined $CreateDate' in payload
+        and f'-CreateDate<{fallback_tag}' in payload
+        and '-overwrite_original_in_place' in payload
+        and 'MPG' in payload
+    ]
+    assert fallback_payloads, "Expected fallback timestamp command for misc videos"
+    for payload in fallback_payloads:
+        assert f'-DateTimeOriginal<{fallback_tag}' in payload
+        assert f'-ModifyDate<{fallback_tag}' in payload
+
+
 def test_exif_sort_guards_creation_date_commands(monkeypatch, tmp_path):
     instances = []
 
